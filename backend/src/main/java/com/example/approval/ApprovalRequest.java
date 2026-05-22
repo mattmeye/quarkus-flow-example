@@ -55,6 +55,15 @@ public class ApprovalRequest {
     @Column(name = "outcome", length = 32)
     private String outcome;
 
+    /**
+     * Engine-side instance id of the running workflow. Captured by
+     * {@code ApprovalResource} before {@code instance.start()} so REST
+     * handlers and the scheduler can emit CloudEvents addressed to the
+     * specific suspended workflow instance.
+     */
+    @Column(name = "workflow_instance_id", length = 64)
+    private String workflowInstanceId;
+
     @OneToMany(mappedBy = "request", cascade = CascadeType.ALL,
                orphanRemoval = true, fetch = FetchType.LAZY)
     @OrderBy("at ASC")
@@ -86,5 +95,7 @@ public class ApprovalRequest {
     public void setState(ApprovalState state) { this.state = state; }
     public String getOutcome() { return outcome; }
     public void setOutcome(String outcome) { this.outcome = outcome; }
+    public String getWorkflowInstanceId() { return workflowInstanceId; }
+    public void setWorkflowInstanceId(String workflowInstanceId) { this.workflowInstanceId = workflowInstanceId; }
     public List<HistoryEntry> getHistory() { return List.copyOf(history); }
 }

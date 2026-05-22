@@ -23,9 +23,14 @@ import static io.serverlessworkflow.fluent.func.dsl.FuncDSL.tryCatch;
  * Three-stage approval workflow defined with the Quarkus Flow Java DSL
  * (CNCF Serverless Workflow specification, DSL 1.0.0).
  *
- * Every async wait step creates a {@link HumanTask} via {@link TaskService}
- * and blocks on its future, so the public REST API is uniform across
- * stages: clients only ever complete or cancel tasks.
+ * Each {@code function} step creates (or finds) the matching
+ * {@link HumanTask}, then drives it to completion via the
+ * {@code DB-polling} {@link TaskService#awaitResolved} call. Because the
+ * task state is fully persistent and the engine position is persisted
+ * by {@code quarkus-flow-jpa}, both halves can survive a JVM restart:
+ * on resume the function re-enters, sees that the existing
+ * {@code PENDING} task is already attached to this request stage, and
+ * keeps polling — no in-memory {@code CompletableFuture} required.
  *
  *   AwaitingConfirmation (CONFIRMATION task -> REQUESTER)
  *     -> AwaitingGroup1Approval (APPROVAL task -> GROUP_1)
@@ -110,7 +115,7 @@ public class ApprovalWorkflow extends Flow {
                 HumanTask.AssigneeGroup.REQUESTER,
                 Map.of("confirmationToken", token));
 
-        TaskResult result = tasks.await(task);
+        TaskResult result = tasks.awaitResolved(task.getId());
         log.info("Workflow {} confirmation result: {}", requestId, result);
         if (!"CONFIRMED".equals(result.outcome())) {
             throw new WorkflowException(WorkflowError.error(ERR_CONFIRMATION_DECLINED, 410).build());
@@ -126,7 +131,7 @@ public class ApprovalWorkflow extends Flow {
         HumanTask task = tasks.create(requestId,
                 HumanTask.Type.APPROVAL, name, group, Map.of());
 
-        TaskResult result = tasks.await(task);
+        TaskResult result = tasks.awaitResolved(task.getId());
         log.info("Workflow {} {} result: {}", requestId, group, result);
         approvals.appendHistory(requestId, group + "_" + result.outcome(),
                 group + " (" + result.actor() + ") decided: " + result.outcome());

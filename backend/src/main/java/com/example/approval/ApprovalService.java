@@ -70,6 +70,14 @@ public class ApprovalService implements PanacheRepositoryBase<ApprovalRequest, S
     }
 
     @Transactional
+    public void recordWorkflowInstanceId(String requestId, String workflowInstanceId) {
+        ApprovalRequest r = findById(requestId);
+        if (r != null) {
+            r.setWorkflowInstanceId(workflowInstanceId);
+        }
+    }
+
+    @Transactional
     public void appendHistory(String requestId, String stage, String message) {
         ApprovalRequest r = findById(requestId);
         if (r != null) {
