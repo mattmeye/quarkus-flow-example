@@ -1,0 +1,79 @@
+#
+# CNCF Serverless Workflow DSL 1.0.0 - Reference definition of the
+# three-stage approval flow with an asynchronous email/terms
+# confirmation step before the approval chain. The Java DSL workflow
+# in `ApprovalWorkflow.java` is the runtime source of truth; this
+# YAML file documents the same workflow topology in declarative form.
+#
+document:
+  dsl: 1.0.0
+  namespace: approval-demo
+  name: approval
+  version: 0.1.0
+
+do:
+  # Stage 0 - requester must confirm email + accept terms (async)
+  - awaitConfirmation:
+      call: function
+      with:
+        name: awaitConfirmation
+      then: evaluateConfirmation
+
+  - evaluateConfirmation:
+      switch:
+        - confirmed:
+            when: '.confirmed == true'
+            then: submitted
+        - declined:
+            when: '.confirmed == false'
+            then: rejected
+
+  - submitted:
+      call: function
+      with:
+        name: onSubmitted
+      then: awaitGroup1Decision
+
+  # Stage 1 - approval group 1
+  - awaitGroup1Decision:
+      call: function
+      with:
+        name: awaitGroup1Decision
+      then: evaluateGroup1
+
+  - evaluateGroup1:
+      switch:
+        - approved:
+            when: '.group1Decision == "APPROVED"'
+            then: awaitGroup2Decision
+        - rejected:
+            when: '.group1Decision == "REJECTED"'
+            then: rejected
+
+  # Stage 2 - approval group 2
+  - awaitGroup2Decision:
+      call: function
+      with:
+        name: awaitGroup2Decision
+      then: evaluateGroup2
+
+  - evaluateGroup2:
+      switch:
+        - approved:
+            when: '.group2Decision == "APPROVED"'
+            then: approved
+        - rejected:
+            when: '.group2Decision == "REJECTED"'
+            then: rejected
+
+  - approved:
+      call: function
+      with:
+        name: markApproved
+      then: end
+
+  - rejected:
+      call: function
+      with:
+        name: markRejected
+      then: end

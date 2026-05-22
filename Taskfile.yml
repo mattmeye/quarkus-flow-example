@@ -1,0 +1,103 @@
+version: '3'
+
+# Single entry-point for development and CI on this repository.
+# Prerequisites: `mise install` (or have Java 17, Maven, Node 20 on PATH).
+# Run `task --list` to see available tasks.
+
+vars:
+  BACKEND_DIR: backend
+  FRONTEND_DIR: frontend
+
+tasks:
+
+  # ---------- top-level ----------
+
+  default:
+    desc: Show available tasks
+    cmds:
+      - task --list
+
+  install:
+    desc: Install all dependencies (frontend + warm up Maven cache)
+    deps: [install:frontend, install:backend]
+
+  build:
+    desc: Build backend (Quarkus JAR) and frontend (Angular dist)
+    deps: [build:backend, build:frontend]
+
+  test:
+    desc: Run the full test suite (backend + frontend)
+    deps: [test:backend, test:frontend]
+
+  dev:
+    desc: Run backend + frontend in dev mode in parallel
+    deps: [dev:backend, dev:frontend]
+
+  clean:
+    desc: Remove build output for backend and frontend
+    cmds:
+      - rm -rf {{.BACKEND_DIR}}/target
+      - rm -rf {{.FRONTEND_DIR}}/dist {{.FRONTEND_DIR}}/.angular
+
+  # ---------- backend ----------
+
+  install:backend:
+    desc: Resolve backend dependencies (no compile)
+    dir: '{{.BACKEND_DIR}}'
+    cmds:
+      - mvn -q -B dependency:go-offline
+
+  dev:backend:
+    desc: Run Quarkus in dev mode (live reload at http://localhost:8080)
+    dir: '{{.BACKEND_DIR}}'
+    cmds:
+      - mvn -q quarkus:dev
+
+  build:backend:
+    desc: Build the Quarkus runner JAR
+    dir: '{{.BACKEND_DIR}}'
+    cmds:
+      - mvn -q -B -DskipTests package
+
+  test:backend:
+    desc: Run JUnit5 / RestAssured tests against the workflow
+    dir: '{{.BACKEND_DIR}}'
+    cmds:
+      - mvn -B test
+
+  # ---------- frontend ----------
+
+  install:frontend:
+    desc: npm install for the Angular app
+    dir: '{{.FRONTEND_DIR}}'
+    cmds:
+      - npm install --no-audit --no-fund
+
+  dev:frontend:
+    desc: Run the Angular dev server (http://localhost:4200)
+    dir: '{{.FRONTEND_DIR}}'
+    cmds:
+      - npm start
+
+  build:frontend:
+    desc: Production build of the Angular app
+    dir: '{{.FRONTEND_DIR}}'
+    cmds:
+      - npm run build
+
+  test:frontend:
+    desc: Run Angular unit tests headlessly
+    dir: '{{.FRONTEND_DIR}}'
+    cmds:
+      - npm test
+
+  # ---------- end-to-end ----------
+
+  e2e:
+    desc: |
+      Smoke-test the running stack via curl: submits a request, confirms
+      it, approves twice and asserts the final state is APPROVED.
+      Requires `task dev` (or at least `task dev:backend`) to be running
+      in another shell.
+    cmds:
+      - bash scripts/e2e-smoke.sh
