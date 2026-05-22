@@ -1,11 +1,15 @@
 package com.example.approval;
 
+import io.quarkus.scheduler.Scheduled;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.inject.Instance;
 import jakarta.inject.Inject;
+import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.time.Duration;
+import java.time.Instant;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
@@ -22,24 +26,50 @@ import java.util.concurrent.TimeoutException;
  * or cancel a task). Validation that is specific to a task type
  * (e.g. checking the confirmation token) lives in
  * {@link #validate(HumanTask, String, Map)}.
+ *
+ * Pending tasks carry a deadline; {@link #sweep()} runs on a scheduled
+ * interval and fires a one-shot reminder before the deadline, then
+ * expires the task once the deadline passes. Expiring a task completes
+ * its future with the synthetic {@link HumanTask#OUTCOME_EXPIRED} outcome,
+ * so the workflow naturally drives the request to {@code REJECTED}
+ * (same code path as a cancelled CONFIRMATION or a non-APPROVED APPROVAL).
  */
 @ApplicationScoped
 public class TaskService {
 
     private static final Logger log = LoggerFactory.getLogger(TaskService.class);
-    private static final long AWAIT_TIMEOUT_HOURS = 24;
+    private static final long AWAIT_TIMEOUT_HOURS = 72;
 
     private final Map<String, HumanTask> tasks = new ConcurrentHashMap<>();
 
     @Inject
     Instance<ApprovalEventPublisher> eventPublisher;
 
+    @ConfigProperty(name = "app.task.confirmation.timeout", defaultValue = "PT24H")
+    Duration confirmationTimeout;
+
+    @ConfigProperty(name = "app.task.approval.timeout", defaultValue = "PT48H")
+    Duration approvalTimeout;
+
+    /**
+     * Fraction of the timeout that must elapse before a reminder fires.
+     * {@code 0.75} means the reminder is sent once 75% of the window has
+     * passed (i.e. 25% remains before the deadline).
+     */
+    @ConfigProperty(name = "app.task.reminder.offset-fraction", defaultValue = "0.75")
+    double reminderOffsetFraction;
+
     public HumanTask create(String requestId, HumanTask.Type type, String name,
                             HumanTask.AssigneeGroup group, Map<String, Object> context) {
-        HumanTask task = new HumanTask(requestId, type, name, group, context);
+        Duration timeout = switch (type) {
+            case CONFIRMATION -> confirmationTimeout;
+            case APPROVAL -> approvalTimeout;
+        };
+        HumanTask task = new HumanTask(requestId, type, name, group, context,
+                timeout, reminderOffsetFraction);
         tasks.put(task.getId(), task);
-        log.info("Created task {} ({}) for request {} assigned to {}",
-                task.getId(), type, requestId, group);
+        log.info("Created task {} ({}) for request {} assigned to {} (dueAt={}, reminderAt={})",
+                task.getId(), type, requestId, group, task.getDueAt(), task.getReminderAt());
         publish(ApprovalEvent.taskCreated(task));
         return task;
     }
@@ -90,8 +120,8 @@ public class TaskService {
     }
 
     /**
-     * Blocks the calling (workflow) thread until the task is completed
-     * or cancelled, then returns the result.
+     * Blocks the calling (workflow) thread until the task is completed,
+     * cancelled or expired, then returns the result.
      */
     public TaskResult await(HumanTask task) {
         try {
@@ -102,6 +132,37 @@ public class TaskService {
         } catch (ExecutionException | TimeoutException e) {
             throw new RuntimeException("Failed waiting for task " + task.getId(), e);
         }
+    }
+
+    /**
+     * Periodic sweep over pending tasks. Runs every second by default; the
+     * interval is configurable via {@code app.task.sweep.every}. The job is
+     * cheap (an in-memory iteration plus a couple of {@link Instant#isAfter}
+     * checks) and emits events at most once per task transition.
+     */
+    @Scheduled(every = "${app.task.sweep.every:1s}", concurrentExecution = Scheduled.ConcurrentExecution.SKIP)
+    void sweep() {
+        Instant now = Instant.now();
+        for (HumanTask task : tasks.values()) {
+            if (task.getStatus() != HumanTask.Status.PENDING) continue;
+
+            if (!task.isReminded() && !now.isBefore(task.getReminderAt())) {
+                task.markReminded();
+                log.info("Reminder fired for task {} ({}) - due at {}",
+                        task.getId(), task.getType(), task.getDueAt());
+                publish(ApprovalEvent.taskReminder(task));
+            }
+
+            if (!now.isBefore(task.getDueAt())) {
+                expireInternal(task);
+            }
+        }
+    }
+
+    private void expireInternal(HumanTask task) {
+        task.markExpired();
+        log.info("Expired task {} ({}) at {}", task.getId(), task.getType(), task.getDueAt());
+        publish(ApprovalEvent.taskExpired(task));
     }
 
     /**

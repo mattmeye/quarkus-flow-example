@@ -24,6 +24,11 @@ import { ApprovalService } from '../../services/approval.service';
         <span class="meta">created {{ task.createdAt | date:'mediumTime' }}</span>
       </div>
 
+      <div class="deadline" [class.warn]="task.reminded">
+        <span>Due {{ task.dueAt | date:'medium' }}</span>
+        <span *ngIf="task.reminded" class="pill">⏰ Reminder sent</span>
+      </div>
+
       <!-- CONFIRMATION task -->
       <ng-container *ngIf="task.type === 'CONFIRMATION'">
         <div class="mailbox">
@@ -99,6 +104,15 @@ import { ApprovalService } from '../../services/approval.service';
     .err {
       margin-top: 0.6rem; color: #fecaca; background: #7f1d1d;
       padding: 0.4rem 0.6rem; border-radius: 6px; font-size: 12px;
+    }
+    .deadline {
+      display: flex; align-items: center; gap: 0.6rem;
+      margin-top: 0.4rem; font-size: 12px; color: var(--fg-muted);
+    }
+    .deadline.warn { color: #fcd34d; }
+    .deadline .pill {
+      background: #78350f; color: #fde68a;
+      padding: 2px 8px; border-radius: 999px; font-size: 11px;
     }
   `]
 })

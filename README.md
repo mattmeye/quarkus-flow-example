@@ -80,12 +80,15 @@ type-agnostic.
 
 ```mermaid
 stateDiagram-v2
-    [*] --> PENDING : TaskService.create()
+    [*] --> PENDING : TaskService.create()<br/>(dueAt = now + timeout)
+    PENDING --> PENDING : sweep @ reminderAt<br/>(reminded := true,<br/>TASK_REMINDER event)
     PENDING --> COMPLETED : POST /complete<br/>(valid outcome)
     PENDING --> CANCELLED : POST /cancel
+    PENDING --> EXPIRED : sweep @ dueAt<br/>(actor = SYSTEM,<br/>outcome = EXPIRED,<br/>TASK_EXPIRED event)
     PENDING --> PENDING : POST /complete<br/>(invalid outcome,<br/>token or terms)
     COMPLETED --> [*]
     CANCELLED --> [*]
+    EXPIRED   --> [*]
 ```
 
 #### Happy-path interaction (REST + WebSocket)
@@ -200,7 +203,7 @@ cancelling tasks. No new REST routes are needed when stages are added.
 | GET    | `/api/tasks/{id}`                   | Get a single task                                      |
 | POST   | `/api/tasks/{id}/complete`          | Complete a task: `{ actor, outcome, payload }`         |
 | POST   | `/api/tasks/{id}/cancel`            | Cancel a pending task: `{ actor, reason }`             |
-| WS     | `/approval-events`                  | Server-pushed request- and task-lifecycle events       |
+| WS     | `/approval-events`                  | Server-pushed request- and task-lifecycle events (`REQUEST_CREATED`, `STATE_CHANGED`, `TASK_CREATED`, `TASK_COMPLETED`, `TASK_REMINDER`, `TASK_EXPIRED`) |
 
 Task types currently emitted by `ApprovalWorkflow`:
 
@@ -208,6 +211,34 @@ Task types currently emitted by `ApprovalWorkflow`:
 | -------------- | ---------- | --------------------- | -------------------------------- |
 | `CONFIRMATION` | `REQUESTER`| `CONFIRMED`, `CANCELLED` | `{ token, termsAccepted }` |
 | `APPROVAL`     | `GROUP_1`, `GROUP_2` | `APPROVED`, `REJECTED` | optional `{ reason }` |
+
+### Task deadlines, reminders and expiration
+
+Every `HumanTask` is created with a `dueAt` deadline (and a `reminderAt`
+timestamp computed as a fraction of the timeout). A periodic scheduler
+(`TaskService#sweep`, every second by default) walks all pending tasks
+and:
+
+1. Emits a one-shot **`TASK_REMINDER`** event when `now >= reminderAt`
+   (the task stays `PENDING`, but `reminded` flips to `true`).
+2. Marks the task **`EXPIRED`** (`status=EXPIRED`, `outcome=EXPIRED`,
+   `actor=SYSTEM`) once `now >= dueAt`, emits **`TASK_EXPIRED`**, and
+   completes the workflow future — which sends the request to
+   `REJECTED` via the same branch that handles non-`APPROVED`/non-
+   `CONFIRMED` outcomes.
+
+Defaults (configurable in `application.properties`):
+
+| Property                              | Default | Meaning                                         |
+| ------------------------------------- | ------- | ----------------------------------------------- |
+| `app.task.confirmation.timeout`       | `PT24H` | Deadline for `CONFIRMATION` tasks (ISO-8601).   |
+| `app.task.approval.timeout`           | `PT48H` | Deadline for `APPROVAL` tasks.                  |
+| `app.task.reminder.offset-fraction`   | `0.75`  | Reminder fires after this fraction of the window has elapsed (i.e. with 25% remaining). |
+| `app.task.sweep.every`                | `1s`    | Quarkus Scheduler interval for `TaskService#sweep`. |
+
+Each `TaskDto` exposes `dueAt`, `reminderAt`, `reminded` and the
+extended `status` (`PENDING | COMPLETED | CANCELLED | EXPIRED`) so the
+UI can render a countdown and a "Reminder sent" / "Expired" badge.
 
 ### Frontend
 

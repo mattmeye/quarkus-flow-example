@@ -7,7 +7,7 @@ export type ApprovalState =
   | 'REJECTED';
 
 export type TaskType = 'CONFIRMATION' | 'APPROVAL';
-export type TaskStatus = 'PENDING' | 'COMPLETED' | 'CANCELLED';
+export type TaskStatus = 'PENDING' | 'COMPLETED' | 'CANCELLED' | 'EXPIRED';
 export type AssigneeGroup = 'REQUESTER' | 'GROUP_1' | 'GROUP_2';
 
 export interface HumanTask {
@@ -19,6 +19,9 @@ export interface HumanTask {
   status: TaskStatus;
   createdAt: string;
   completedAt: string | null;
+  dueAt: string;
+  reminderAt: string;
+  reminded: boolean;
   context: Record<string, unknown>;
   actor: string | null;
   outcome: string | null;
@@ -45,7 +48,8 @@ export interface ApprovalRequest {
 }
 
 export interface ApprovalEvent {
-  type: 'REQUEST_CREATED' | 'STATE_CHANGED' | 'TASK_CREATED' | 'TASK_COMPLETED';
+  type: 'REQUEST_CREATED' | 'STATE_CHANGED' | 'TASK_CREATED' | 'TASK_COMPLETED'
+      | 'TASK_REMINDER' | 'TASK_EXPIRED';
   requestId: string;
   taskId: string | null;
   state: ApprovalState | null;

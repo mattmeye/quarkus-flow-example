@@ -63,6 +63,12 @@
             <artifactId>quarkus-websockets</artifactId>
         </dependency>
 
+        <!-- Scheduler for HumanTask reminders and expirations -->
+        <dependency>
+            <groupId>io.quarkus</groupId>
+            <artifactId>quarkus-scheduler</artifactId>
+        </dependency>
+
         <!-- Quarkus Flow Extension (CNCF Serverless Workflow) -->
         <dependency>
             <groupId>io.quarkiverse.flow</groupId>
