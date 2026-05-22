@@ -1,6 +1,7 @@
 package com.example.approval;
 
 import jakarta.inject.Inject;
+import jakarta.transaction.Transactional;
 import jakarta.ws.rs.Consumes;
 import jakarta.ws.rs.GET;
 import jakarta.ws.rs.POST;
@@ -43,6 +44,7 @@ public class TaskResource {
             Map<String, Object> payload) {}
 
     @GET
+    @Transactional
     public List<TaskDto> list(@QueryParam("status") HumanTask.Status status,
                               @QueryParam("group") HumanTask.AssigneeGroup group,
                               @QueryParam("requestId") String requestId) {
@@ -56,21 +58,23 @@ public class TaskResource {
 
     @GET
     @Path("/{id}")
+    @Transactional
     public Response get(@PathParam("id") String id) {
-        return tasks.find(id)
+        return tasks.lookup(id)
                 .map(t -> Response.ok(toDto(t)).build())
                 .orElseGet(() -> Response.status(Response.Status.NOT_FOUND).build());
     }
 
     @POST
     @Path("/{id}/complete")
+    @Transactional
     public Response complete(@PathParam("id") String id, CompleteRequest req) {
         if (req == null || isBlank(req.outcome()) || isBlank(req.actor())) {
             return badRequest("actor and outcome are required");
         }
         try {
             tasks.complete(id, req.actor(), req.outcome(), req.payload());
-            return tasks.find(id)
+            return tasks.lookup(id)
                     .map(t -> Response.ok(toDto(t)).build())
                     .orElseGet(() -> Response.status(Response.Status.NOT_FOUND).build());
         } catch (IllegalArgumentException e) {
@@ -88,13 +92,14 @@ public class TaskResource {
 
     @POST
     @Path("/{id}/cancel")
+    @Transactional
     public Response cancel(@PathParam("id") String id, CancelRequest req) {
         if (req == null || isBlank(req.actor())) {
             return badRequest("actor is required");
         }
         try {
             tasks.cancel(id, req.actor(), req.reason());
-            return tasks.find(id)
+            return tasks.lookup(id)
                     .map(t -> Response.ok(toDto(t)).build())
                     .orElseGet(() -> Response.status(Response.Status.NOT_FOUND).build());
         } catch (IllegalArgumentException e) {

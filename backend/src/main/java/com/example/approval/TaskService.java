@@ -1,46 +1,48 @@
 package com.example.approval;
 
+import io.quarkus.hibernate.orm.panache.PanacheRepositoryBase;
 import io.quarkus.scheduler.Scheduled;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.inject.Instance;
 import jakarta.inject.Inject;
+import jakarta.transaction.Transactional;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.time.Duration;
 import java.time.Instant;
-import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
 /**
- * Owns all {@link HumanTask}s and brokers their lifecycle between
- * the workflow (which awaits a task) and REST callers (which complete
- * or cancel a task). Validation that is specific to a task type
- * (e.g. checking the confirmation token) lives in
- * {@link #validate(HumanTask, String, Map)}.
+ * Owns all {@link HumanTask}s and brokers their lifecycle between the
+ * workflow (which awaits a task) and REST callers (which complete or
+ * cancel a task).
  *
- * Pending tasks carry a deadline; {@link #sweep()} runs on a scheduled
- * interval and fires a one-shot reminder before the deadline, then
- * expires the task once the deadline passes. Expiring a task completes
- * its future with the synthetic {@link HumanTask#OUTCOME_EXPIRED} outcome,
- * so the workflow naturally drives the request to {@code REJECTED}
- * (same code path as a cancelled CONFIRMATION or a non-APPROVED APPROVAL).
+ * Persistent fields (status, dueAt, reminderAt, …) live on the JPA
+ * entity, so every transition survives a restart. The per-task
+ * {@link CompletableFuture} the workflow blocks on is intentionally NOT
+ * persisted — it is JVM-scoped state held in {@link #futures}. Within a
+ * single JVM lifetime that bridges the persistent transitions to the
+ * workflow's `tasks.await(...)` call; across restarts a workflow that
+ * was mid-await would need to be resumed via an event (out of scope for
+ * the demo).
  */
 @ApplicationScoped
-public class TaskService {
+public class TaskService implements PanacheRepositoryBase<HumanTask, String> {
 
     private static final Logger log = LoggerFactory.getLogger(TaskService.class);
     private static final long AWAIT_TIMEOUT_HOURS = 72;
 
-    private final Map<String, HumanTask> tasks = new ConcurrentHashMap<>();
+    /** In-memory CompletableFutures keyed by task id. Not persisted. */
+    private final Map<String, CompletableFuture<TaskResult>> futures = new ConcurrentHashMap<>();
 
     @Inject
     Instance<ApprovalEventPublisher> eventPublisher;
@@ -51,14 +53,10 @@ public class TaskService {
     @ConfigProperty(name = "app.task.approval.timeout", defaultValue = "PT48H")
     Duration approvalTimeout;
 
-    /**
-     * Fraction of the timeout that must elapse before a reminder fires.
-     * {@code 0.75} means the reminder is sent once 75% of the window has
-     * passed (i.e. 25% remains before the deadline).
-     */
     @ConfigProperty(name = "app.task.reminder.offset-fraction", defaultValue = "0.75")
     double reminderOffsetFraction;
 
+    @Transactional
     public HumanTask create(String requestId, HumanTask.Type type, String name,
                             HumanTask.AssigneeGroup group, Map<String, Object> context) {
         Duration timeout = switch (type) {
@@ -67,32 +65,32 @@ public class TaskService {
         };
         HumanTask task = new HumanTask(requestId, type, name, group, context,
                 timeout, reminderOffsetFraction);
-        tasks.put(task.getId(), task);
+        persist(task);
+        futures.put(task.getId(), new CompletableFuture<>());
         log.info("Created task {} ({}) for request {} assigned to {} (dueAt={}, reminderAt={})",
                 task.getId(), type, requestId, group, task.getDueAt(), task.getReminderAt());
         publish(ApprovalEvent.taskCreated(task));
         return task;
     }
 
-    public Optional<HumanTask> find(String taskId) {
-        return Optional.ofNullable(tasks.get(taskId));
+    @Transactional
+    public Optional<HumanTask> lookup(String taskId) {
+        return Optional.ofNullable(findById(taskId));
     }
 
+    @Transactional
     public List<HumanTask> list() {
-        return tasks.values().stream()
-                .sorted(Comparator.comparing(HumanTask::getCreatedAt).reversed())
-                .toList();
+        return find("ORDER BY createdAt DESC").list();
     }
 
+    @Transactional
     public List<HumanTask> listForRequest(String requestId) {
-        return tasks.values().stream()
-                .filter(t -> Objects.equals(t.getRequestId(), requestId))
-                .sorted(Comparator.comparing(HumanTask::getCreatedAt))
-                .toList();
+        return find("requestId = ?1 ORDER BY createdAt ASC", requestId).list();
     }
 
+    @Transactional
     public TaskResult complete(String taskId, String actor, String outcome, Map<String, Object> payload) {
-        HumanTask task = require(taskId);
+        HumanTask task = requireManaged(taskId);
         if (task.getStatus() != HumanTask.Status.PENDING) {
             throw new IllegalStateException(
                     "Task " + taskId + " is not pending (status=" + task.getStatus() + ")");
@@ -105,11 +103,13 @@ public class TaskService {
         task.markCompleted(result);
         log.info("Completed task {} with outcome={} by={}", taskId, outcome, actor);
         publish(ApprovalEvent.taskCompleted(task));
+        signal(taskId, result);
         return result;
     }
 
+    @Transactional
     public void cancel(String taskId, String actor, String reason) {
-        HumanTask task = require(taskId);
+        HumanTask task = requireManaged(taskId);
         if (task.getStatus() != HumanTask.Status.PENDING) {
             throw new IllegalStateException(
                     "Task " + taskId + " is not pending (status=" + task.getStatus() + ")");
@@ -117,6 +117,7 @@ public class TaskService {
         task.markCancelled(actor, reason);
         log.info("Cancelled task {} by={} reason={}", taskId, actor, reason);
         publish(ApprovalEvent.taskCompleted(task));
+        signal(taskId, task.asResult());
     }
 
     /**
@@ -124,45 +125,51 @@ public class TaskService {
      * cancelled or expired, then returns the result.
      */
     public TaskResult await(HumanTask task) {
+        CompletableFuture<TaskResult> f = futures.computeIfAbsent(task.getId(), k -> new CompletableFuture<>());
         try {
-            return task.future().get(AWAIT_TIMEOUT_HOURS, TimeUnit.HOURS);
+            return f.get(AWAIT_TIMEOUT_HOURS, TimeUnit.HOURS);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new RuntimeException("Interrupted while waiting for task " + task.getId(), e);
         } catch (ExecutionException | TimeoutException e) {
             throw new RuntimeException("Failed waiting for task " + task.getId(), e);
+        } finally {
+            futures.remove(task.getId());
         }
     }
 
     /**
-     * Periodic sweep over pending tasks. Runs every second by default; the
-     * interval is configurable via {@code app.task.sweep.every}. The job is
-     * cheap (an in-memory iteration plus a couple of {@link Instant#isAfter}
-     * checks) and emits events at most once per task transition.
+     * Periodic sweep over pending tasks. Cheap: one indexed query and at
+     * most one row update per pending task. Runs every second by default;
+     * the interval is configurable via {@code app.task.sweep.every}.
      */
     @Scheduled(every = "${app.task.sweep.every:1s}", concurrentExecution = Scheduled.ConcurrentExecution.SKIP)
+    @Transactional
     void sweep() {
         Instant now = Instant.now();
-        for (HumanTask task : tasks.values()) {
-            if (task.getStatus() != HumanTask.Status.PENDING) continue;
-
+        List<HumanTask> pending = find("status = ?1", HumanTask.Status.PENDING).list();
+        for (HumanTask task : pending) {
             if (!task.isReminded() && !now.isBefore(task.getReminderAt())) {
                 task.markReminded();
                 log.info("Reminder fired for task {} ({}) - due at {}",
                         task.getId(), task.getType(), task.getDueAt());
                 publish(ApprovalEvent.taskReminder(task));
             }
-
             if (!now.isBefore(task.getDueAt())) {
-                expireInternal(task);
+                task.markExpired();
+                log.info("Expired task {} ({}) at {}",
+                        task.getId(), task.getType(), task.getDueAt());
+                publish(ApprovalEvent.taskExpired(task));
+                signal(task.getId(), task.asResult());
             }
         }
     }
 
-    private void expireInternal(HumanTask task) {
-        task.markExpired();
-        log.info("Expired task {} ({}) at {}", task.getId(), task.getType(), task.getDueAt());
-        publish(ApprovalEvent.taskExpired(task));
+    private void signal(String taskId, TaskResult result) {
+        CompletableFuture<TaskResult> f = futures.get(taskId);
+        if (f != null && !f.isDone()) {
+            f.complete(result);
+        }
     }
 
     /**
@@ -196,8 +203,8 @@ public class TaskService {
         }
     }
 
-    private HumanTask require(String taskId) {
-        HumanTask t = tasks.get(taskId);
+    private HumanTask requireManaged(String taskId) {
+        HumanTask t = findById(taskId);
         if (t == null) throw new IllegalArgumentException("Unknown task id: " + taskId);
         return t;
     }

@@ -2,6 +2,7 @@ package com.example.approval;
 
 import io.serverlessworkflow.impl.WorkflowInstance;
 import jakarta.inject.Inject;
+import jakarta.transaction.Transactional;
 import jakarta.ws.rs.Consumes;
 import jakarta.ws.rs.GET;
 import jakarta.ws.rs.POST;
@@ -45,6 +46,7 @@ public class ApprovalResource {
     public record HistoryDto(Instant at, String stage, String message) {}
 
     @POST
+    @Transactional
     public Response create(CreateRequest req) {
         if (req == null || isBlank(req.requester()) || isBlank(req.subject()) || isBlank(req.email())) {
             return badRequest("requester, email and subject are required");
@@ -73,6 +75,7 @@ public class ApprovalResource {
     }
 
     @GET
+    @Transactional
     public List<RequestDto> list() {
         return approvals.list().stream()
                 .sorted((a, b) -> b.getCreatedAt().compareTo(a.getCreatedAt()))
@@ -81,8 +84,9 @@ public class ApprovalResource {
 
     @GET
     @Path("/{id}")
+    @Transactional
     public Response get(@PathParam("id") String id) {
-        return approvals.find(id)
+        return approvals.lookup(id)
                 .map(r -> Response.ok(toDto(r)).build())
                 .orElseGet(() -> Response.status(Response.Status.NOT_FOUND).build());
     }
@@ -96,7 +100,7 @@ public class ApprovalResource {
 
     RequestDto toDto(ApprovalRequest r) {
         List<HistoryDto> hist = r.getHistory().stream()
-                .map(h -> new HistoryDto(h.at(), h.stage(), h.message()))
+                .map(h -> new HistoryDto(h.getAt(), h.getStage(), h.getMessage()))
                 .collect(Collectors.toList());
         List<TaskResource.TaskDto> taskDtos = tasks.listForRequest(r.getId()).stream()
                 .map(TaskResource::toDto)

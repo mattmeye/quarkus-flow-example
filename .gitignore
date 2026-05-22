@@ -29,5 +29,8 @@ yarn-error.log*
 .DS_Store
 Thumbs.db
 
-# Quarkus Flow MV store
+# Quarkus Flow MV store (legacy default backend)
 .*-mvstore/
+
+# H2 file-based datasource (default dev location for app + flow state)
+.h2/
