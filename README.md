@@ -133,8 +133,9 @@ sequenceDiagram
 | -------- | ----------------------------------------------------------------- |
 | Workflow | [Quarkus Flow](https://docs.quarkiverse.io/quarkus-flow/dev/) 0.9.0 (CNCF Serverless Workflow DSL 1.0.0) via `io.quarkiverse.flow:quarkus-flow`, on top of `io.serverlessworkflow` 7.21 |
 | Backend  | Quarkus 3.33 on Java 25 (REST + WebSocket)                         |
-| Frontend | Angular 21 standalone components, TypeScript 5.9                   |
+| Frontend | Angular 21 — zoneless, standalone components, TypeScript 5.9      |
 | Transport | REST (commands) + WebSocket (live state events to the UI)         |
+| Testing  | JUnit 5 + RestAssured (backend), Vitest + jsdom (frontend)         |
 | CI / CD  | GitHub Actions (build, test, e2e, CodeQL, dependency-review) + Dependabot (Maven, npm, GitHub Actions) |
 
 The workflow is defined in two equivalent ways:
@@ -248,7 +249,9 @@ task e2e            # curl-based smoke test against a running stack
   wrong token and missing terms acceptance.
 * **Frontend** — `approval.model.spec.ts` and `approval.service.spec.ts`
   cover the state-helper functions and the HTTP service contracts using
-  Angular's `HttpTestingController`.
+  Angular's `HttpTestingController`. Tests run under [Vitest](https://vitest.dev)
+  in a jsdom environment via the Angular 21 `@angular/build:unit-test`
+  builder — no browser or Karma required.
 * **End-to-end** — `scripts/e2e-smoke.sh` drives the running stack from
   the outside via `curl` and verifies the terminal state.
 

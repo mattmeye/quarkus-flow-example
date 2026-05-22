@@ -101,7 +101,7 @@ jobs:
       - name: Build (production)
         run: npm run build
 
-      - name: Unit tests (Karma, headless Chrome)
+      - name: Unit tests (Vitest, jsdom)
         run: npm test
 
       - name: Upload dist

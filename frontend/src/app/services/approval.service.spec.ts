@@ -1,6 +1,8 @@
 import { TestBed } from '@angular/core/testing';
 import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
+import { provideZonelessChangeDetection } from '@angular/core';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { ApprovalService } from './approval.service';
 
 describe('ApprovalService', () => {
@@ -11,6 +13,7 @@ describe('ApprovalService', () => {
     TestBed.configureTestingModule({
       providers: [
         ApprovalService,
+        provideZonelessChangeDetection(),
         provideHttpClient(),
         provideHttpClientTesting()
       ]
@@ -28,7 +31,7 @@ describe('ApprovalService', () => {
     }).subscribe();
     const req = httpMock.expectOne('http://localhost:8080/api/requests');
     expect(req.request.method).toBe('POST');
-    expect(req.request.body.termsAcknowledged).toBeTrue();
+    expect(req.request.body.termsAcknowledged).toBe(true);
     req.flush({});
   });
 
