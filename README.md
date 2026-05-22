@@ -10,6 +10,10 @@ End-to-end demo of a multi-stage approval workflow:
 3. **Approval group 2** — only entered if group 1 approved; the workflow is
    suspended until group 2 decides.
 4. **Terminal** — `APPROVED` if both groups approved, otherwise `REJECTED`.
+   Each `HumanTask` carries a per-type deadline; if the deadline elapses
+   without a decision a scheduled sweep first fires a one-shot reminder
+   and then expires the task (synthetic `outcome = EXPIRED`, actor
+   `SYSTEM`), which drives the request to `REJECTED`.
 
 ### End-to-end flow
 
@@ -18,10 +22,13 @@ flowchart LR
     Start([New request]) --> Conf{Confirm<br/>email + terms?}
     Conf -- confirmed --> G1{Group 1<br/>decision?}
     Conf -- cancelled --> Rej([REJECTED])
+    Conf -. expired .-> Rej
     G1 -- approve --> G2{Group 2<br/>decision?}
     G1 -- reject --> Rej
+    G1 -. expired .-> Rej
     G2 -- approve --> Appr([APPROVED])
     G2 -- reject --> Rej
+    G2 -. expired .-> Rej
 
     classDef terminal fill:#14532d,stroke:#22c55e,color:#bbf7d0
     classDef reject   fill:#7f1d1d,stroke:#ef4444,color:#fecaca
@@ -43,9 +50,11 @@ implemented as wait tasks of the same `ApprovalWorkflow`:
 
 ```mermaid
 flowchart LR
-    Start([Request submitted]) --> CT["HumanTask<br/>type: CONFIRMATION<br/>assignee: REQUESTER<br/>context: { confirmationToken }"]
+    Start([Request submitted]) --> CT["HumanTask<br/>type: CONFIRMATION<br/>assignee: REQUESTER<br/>context: { confirmationToken }<br/>dueAt = now + confirmation.timeout"]
     CT -- "POST /api/tasks/{id}/complete<br/>outcome = CONFIRMED<br/>payload: { token, termsAccepted }" --> Ok([Hand over to<br/>Approval workflow])
     CT -- "POST /api/tasks/{id}/cancel" --> Rej([REJECTED])
+    CT -. "TaskService.sweep @ dueAt<br/>outcome = EXPIRED, actor = SYSTEM" .-> Rej
+    CT -. "TaskService.sweep @ reminderAt<br/>(reminded := true,<br/>TASK_REMINDER event,<br/>task stays PENDING)" .-> CT
     CT -. "400 - invalid token<br/>or terms not accepted" .-> CT
 
     classDef task     fill:#1e3a8a,stroke:#38bdf8,color:#bfdbfe
@@ -58,11 +67,13 @@ flowchart LR
 
 ```mermaid
 flowchart LR
-    Start([Confirmed request]) --> G1["HumanTask<br/>type: APPROVAL<br/>assignee: GROUP_1"]
-    G1 -- "outcome = APPROVED" --> G2["HumanTask<br/>type: APPROVAL<br/>assignee: GROUP_2"]
+    Start([Confirmed request]) --> G1["HumanTask<br/>type: APPROVAL<br/>assignee: GROUP_1<br/>dueAt = now + approval.timeout"]
+    G1 -- "outcome = APPROVED" --> G2["HumanTask<br/>type: APPROVAL<br/>assignee: GROUP_2<br/>dueAt = now + approval.timeout"]
     G1 -- "outcome = REJECTED" --> Rej([REJECTED])
+    G1 -. "sweep @ dueAt<br/>outcome = EXPIRED" .-> Rej
     G2 -- "outcome = APPROVED" --> Appr([APPROVED])
     G2 -- "outcome = REJECTED" --> Rej
+    G2 -. "sweep @ dueAt<br/>outcome = EXPIRED" .-> Rej
 
     classDef task     fill:#1e3a8a,stroke:#38bdf8,color:#bfdbfe
     classDef terminal fill:#14532d,stroke:#22c55e,color:#bbf7d0
