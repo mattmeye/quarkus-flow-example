@@ -131,10 +131,11 @@ sequenceDiagram
 
 | Layer    | Tech                                                              |
 | -------- | ----------------------------------------------------------------- |
-| Workflow | [Quarkus Flow](https://docs.quarkiverse.io/quarkus-flow/dev/) (CNCF Serverless Workflow DSL 1.0.0) via `io.quarkiverse.flow:quarkus-flow` |
-| Backend  | Quarkus 3.35 (REST + WebSocket)                                    |
-| Frontend | Angular 18 standalone components                                   |
+| Workflow | [Quarkus Flow](https://docs.quarkiverse.io/quarkus-flow/dev/) 0.9.0 (CNCF Serverless Workflow DSL 1.0.0) via `io.quarkiverse.flow:quarkus-flow`, on top of `io.serverlessworkflow` 7.21 |
+| Backend  | Quarkus 3.33 on Java 25 (REST + WebSocket)                         |
+| Frontend | Angular 21 standalone components, TypeScript 5.9                   |
 | Transport | REST (commands) + WebSocket (live state events to the UI)         |
+| CI / CD  | GitHub Actions (build, test, e2e, CodeQL, dependency-review) + Dependabot (Maven, npm, GitHub Actions) |
 
 The workflow is defined in two equivalent ways:
 * **Runtime source of truth:** Java DSL in
@@ -153,7 +154,7 @@ Tool versions are pinned with [mise](https://mise.jdx.dev) and orchestrated
 with [task](https://taskfile.dev):
 
 ```bash
-# one-time, installs Java 17, Maven, Node 20, Task into the project shell
+# one-time, installs Java 25, Maven, Node 22, Task into the project shell
 mise install
 
 # show all available tasks
@@ -250,3 +251,25 @@ task e2e            # curl-based smoke test against a running stack
   Angular's `HttpTestingController`.
 * **End-to-end** — `scripts/e2e-smoke.sh` drives the running stack from
   the outside via `curl` and verifies the terminal state.
+
+## CI / CD
+
+GitHub Actions workflows live in [`.github/workflows`](.github/workflows):
+
+| Workflow                | Trigger                          | What it does                                                                                  |
+| ----------------------- | -------------------------------- | --------------------------------------------------------------------------------------------- |
+| `ci.yml`                | push & PR to `main`, manual      | `backend` Maven build + JUnit5; `frontend` `ng build` + Karma; `e2e` smoke against the runner JAR; aggregated `ci-success` gate. |
+| `codeql.yml`            | push & PR to `main`, weekly cron | CodeQL static analysis for `java-kotlin` (Maven manual build) and `javascript-typescript`.    |
+| `dependency-review.yml` | PR to `main`                     | `actions/dependency-review-action`, fails on `high` severity advisories.                      |
+
+Dependency updates are managed by [Dependabot](.github/dependabot.yml) — weekly
+PRs (Mon 06:00 Europe/Berlin) for three ecosystems:
+
+* `maven` (`/backend`) — grouped: Quarkus, Quarkiverse, Serverlessworkflow,
+  Maven plugins, test deps.
+* `npm` (`/frontend`) — grouped: Angular, Karma/Jasmine, TypeScript.
+* `github-actions` (`/`) — all actions in one group.
+
+In-progress runs are auto-cancelled for the same ref via `concurrency`, and
+each job uploads its artifacts (Surefire reports, runner JAR, frontend
+`dist`, e2e Quarkus log) for post-mortem.

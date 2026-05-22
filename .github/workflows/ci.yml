@@ -16,7 +16,7 @@ permissions:
   contents: read
 
 env:
-  JAVA_VERSION: "21"
+  JAVA_VERSION: "25"
   JAVA_DISTRIBUTION: "temurin"
   NODE_VERSION: "22"
 
@@ -30,7 +30,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        java: ["21"]
+        java: ["25"]
     defaults:
       run:
         working-directory: backend
