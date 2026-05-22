@@ -84,18 +84,27 @@ cd backend && mvn quarkus:dev
 cd frontend && npm install && npm start
 ```
 
-REST surface:
+REST surface — **generic, task-based**. Each async step in the workflow
+emits a `HumanTask`; clients drive the workflow forward by completing or
+cancelling tasks. No new REST routes are needed when stages are added.
 
-| Method | Path                                       | Purpose                                       |
-| ------ | ------------------------------------------ | --------------------------------------------- |
-| POST   | `/api/approvals`                           | Create request, returns confirmation link     |
-| GET    | `/api/approvals`                           | List all requests                             |
-| GET    | `/api/approvals/{id}`                      | Get a single request with history             |
-| POST   | `/api/approvals/{id}/confirm`              | Confirm email + accept terms (resumes flow)   |
-| POST   | `/api/approvals/{id}/cancel`               | Cancel before confirmation (flow → REJECTED)  |
-| POST   | `/api/approvals/{id}/group1/decision`      | Group 1 decision (APPROVED / REJECTED)        |
-| POST   | `/api/approvals/{id}/group2/decision`      | Group 2 decision (APPROVED / REJECTED)        |
-| WS     | `/approval-events`                         | Server-pushed state events                    |
+| Method | Path                                | Purpose                                                |
+| ------ | ----------------------------------- | ------------------------------------------------------ |
+| POST   | `/api/requests`                     | Create request, starts workflow instance               |
+| GET    | `/api/requests`                     | List all requests (with embedded tasks + history)      |
+| GET    | `/api/requests/{id}`                | Get a single request                                   |
+| GET    | `/api/tasks?status=&group=&requestId=` | List tasks (with optional filters)                  |
+| GET    | `/api/tasks/{id}`                   | Get a single task                                      |
+| POST   | `/api/tasks/{id}/complete`          | Complete a task: `{ actor, outcome, payload }`         |
+| POST   | `/api/tasks/{id}/cancel`            | Cancel a pending task: `{ actor, reason }`             |
+| WS     | `/approval-events`                  | Server-pushed request- and task-lifecycle events       |
+
+Task types currently emitted by `ApprovalWorkflow`:
+
+| Type           | Assignee   | Valid outcomes        | Payload                          |
+| -------------- | ---------- | --------------------- | -------------------------------- |
+| `CONFIRMATION` | `REQUESTER`| `CONFIRMED`, `CANCELLED` | `{ token, termsAccepted }` |
+| `APPROVAL`     | `GROUP_1`, `GROUP_2` | `APPROVED`, `REJECTED` | optional `{ reason }` |
 
 ### Frontend
 

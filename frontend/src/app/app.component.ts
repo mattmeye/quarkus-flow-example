@@ -1,15 +1,19 @@
 import { Component, OnDestroy, OnInit, signal } from '@angular/core';
-import { RouterLink, RouterOutlet } from '@angular/router';
+import { RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
 import { Subscription } from 'rxjs';
 import { ApprovalEventsService } from './services/approval-events.service';
 
 @Component({
   selector: 'app-root',
   standalone: true,
-  imports: [RouterOutlet, RouterLink],
+  imports: [RouterOutlet, RouterLink, RouterLinkActive],
   template: `
     <header>
       <a routerLink="/" class="brand">Approval Flow</a>
+      <nav>
+        <a routerLink="/" routerLinkActive="active" [routerLinkActiveOptions]="{exact:true}">Requests</a>
+        <a routerLink="/tasks" routerLinkActive="active">Task Inbox</a>
+      </nav>
       <span class="ws" [class.up]="connected()">
         <span class="dot"></span>
         {{ connected() ? 'live' : 'connecting…' }}
@@ -19,7 +23,7 @@ import { ApprovalEventsService } from './services/approval-events.service';
       <router-outlet />
     </main>
     <footer>
-      <span>Quarkus Flow (CNCF Serverless Workflow) &middot; REST + WebSocket</span>
+      <span>Quarkus Flow (CNCF Serverless Workflow) &middot; REST + WebSocket &middot; generic task API</span>
     </footer>
   `,
   styles: [`
@@ -29,6 +33,12 @@ import { ApprovalEventsService } from './services/approval-events.service';
       background: var(--bg-elev);
     }
     .brand { color: var(--accent); text-decoration: none; font-weight: 800; font-size: 1.1rem; }
+    nav { display: flex; gap: 0.4rem; }
+    nav a {
+      color: var(--fg-muted); text-decoration: none; font-size: 13px;
+      padding: 4px 10px; border-radius: 6px;
+    }
+    nav a.active { color: var(--fg); background: var(--bg-elev-2); }
     .ws {
       display: inline-flex; align-items: center; gap: 6px;
       margin-left: auto; font-size: 12px; color: var(--fg-muted);

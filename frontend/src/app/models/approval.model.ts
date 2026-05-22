@@ -6,7 +6,24 @@ export type ApprovalState =
   | 'APPROVED'
   | 'REJECTED';
 
-export type Decision = 'APPROVED' | 'REJECTED';
+export type TaskType = 'CONFIRMATION' | 'APPROVAL';
+export type TaskStatus = 'PENDING' | 'COMPLETED' | 'CANCELLED';
+export type AssigneeGroup = 'REQUESTER' | 'GROUP_1' | 'GROUP_2';
+
+export interface HumanTask {
+  id: string;
+  requestId: string;
+  type: TaskType;
+  name: string;
+  assigneeGroup: AssigneeGroup;
+  status: TaskStatus;
+  createdAt: string;
+  completedAt: string | null;
+  context: Record<string, unknown>;
+  actor: string | null;
+  outcome: string | null;
+  payload: Record<string, unknown> | null;
+}
 
 export interface HistoryEntry {
   at: string;
@@ -21,27 +38,17 @@ export interface ApprovalRequest {
   subject: string;
   description: string;
   state: ApprovalState;
-  emailConfirmed: boolean;
-  termsAccepted: boolean;
-  confirmationToken: string | null;
-  group1Decision: Decision | null;
-  group1Approver: string | null;
-  group2Decision: Decision | null;
-  group2Approver: string | null;
+  outcome: string | null;
   createdAt: string;
-  confirmedAt: string | null;
+  tasks: HumanTask[];
   history: HistoryEntry[];
 }
 
-export interface CreatedResponse {
-  request: ApprovalRequest;
-  confirmationLink: string;
-}
-
 export interface ApprovalEvent {
-  type: 'REQUEST_CREATED' | 'STATE_CHANGED';
+  type: 'REQUEST_CREATED' | 'STATE_CHANGED' | 'TASK_CREATED' | 'TASK_COMPLETED';
   requestId: string;
-  state: ApprovalState;
+  taskId: string | null;
+  state: ApprovalState | null;
   message: string;
   at: string;
 }
@@ -66,4 +73,16 @@ export function stateLabel(s: ApprovalState): string {
     case 'APPROVED': return 'Approved';
     case 'REJECTED': return 'Rejected';
   }
+}
+
+export function groupLabel(g: AssigneeGroup): string {
+  switch (g) {
+    case 'REQUESTER': return 'Requester';
+    case 'GROUP_1': return 'Approval Group 1';
+    case 'GROUP_2': return 'Approval Group 2';
+  }
+}
+
+export function pendingTask(r: ApprovalRequest): HumanTask | undefined {
+  return r.tasks.find(t => t.status === 'PENDING');
 }

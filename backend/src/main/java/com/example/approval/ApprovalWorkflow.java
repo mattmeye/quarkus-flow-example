@@ -12,6 +12,10 @@ import jakarta.inject.Inject;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.security.SecureRandom;
+import java.util.Base64;
+import java.util.Map;
+
 import static io.serverlessworkflow.fluent.func.dsl.FuncDSL.function;
 import static io.serverlessworkflow.fluent.func.dsl.FuncDSL.tryCatch;
 
@@ -19,137 +23,136 @@ import static io.serverlessworkflow.fluent.func.dsl.FuncDSL.tryCatch;
  * Three-stage approval workflow defined with the Quarkus Flow Java DSL
  * (CNCF Serverless Workflow specification, DSL 1.0.0).
  *
- * Topology:
- *   AwaitingConfirmation -> [requester confirms email + terms] ->
- *     - DECLINED -> Rejected (end)
- *     - CONFIRMED -> Submitted -> AwaitingGroup1Approval -> [Group1 decision] ->
- *         - REJECTED -> Rejected (end)
- *         - APPROVED -> AwaitingGroup2Approval -> [Group2 decision] ->
- *             - REJECTED -> Rejected (end)
- *             - APPROVED -> Approved (end)
+ * Every async wait step creates a {@link HumanTask} via {@link TaskService}
+ * and blocks on its future, so the public REST API is uniform across
+ * stages: clients only ever complete or cancel tasks.
  *
- * All three "awaiting" tasks block on a CompletableFuture that is completed
- * by the corresponding REST endpoint when a human action occurs.
+ *   AwaitingConfirmation (CONFIRMATION task -> REQUESTER)
+ *     -> AwaitingGroup1Approval (APPROVAL task -> GROUP_1)
+ *       -> AwaitingGroup2Approval (APPROVAL task -> GROUP_2)
+ *         -> Approved / Rejected
  */
 @ApplicationScoped
 public class ApprovalWorkflow extends Flow {
 
     private static final Logger log = LoggerFactory.getLogger(ApprovalWorkflow.class);
+    private static final SecureRandom RNG = new SecureRandom();
 
     private static final String ERR_CONFIRMATION_DECLINED = "ERR_CONFIRMATION_DECLINED";
     private static final String ERR_REJECTED_GROUP1 = "ERR_REJECTED_GROUP1";
     private static final String ERR_REJECTED_GROUP2 = "ERR_REJECTED_GROUP2";
 
-    @Inject
-    ApprovalService service;
+    @Inject ApprovalService approvals;
+    @Inject TaskService tasks;
 
     @Override
     public Workflow descriptor() {
         return FuncWorkflowBuilder.workflow("approval", "approval-demo")
                 .tasks(
 
-                        // -------- Stage 0: async email/terms confirmation by the requester
-                        tryCatch(
-                                "confirmationStage",
+                        tryCatch("confirmationStage",
                                 t -> t.tryCatch(function("awaitConfirmation",
-                                        (WorkflowInput in) -> awaitConfirmation(in.requestId())))
+                                        (WorkflowInput in) -> doConfirmation(in.requestId())))
                                         .catchError(err -> err.type(ERR_CONFIRMATION_DECLINED),
-                                                function("recordConfirmationDeclined",
-                                                        (WorkflowInput in) -> {
-                                                            service.transitionTo(in.requestId(),
-                                                                    ApprovalState.REJECTED,
-                                                                    "Requester did not confirm email / terms");
-                                                            return new WorkflowOutput(in.requestId(), "REJECTED");
-                                                        })
+                                                function("finalizeDeclined",
+                                                        (WorkflowInput in) -> finalizeRejected(in.requestId(),
+                                                                "Requester did not confirm"))
                                                         .then(FlowDirectiveEnum.END))),
 
-                        // -------- Stage 1: enter the approval chain
-                        function("onSubmitted", (Group1Input in) -> {
-                            service.transitionTo(in.requestId(), ApprovalState.SUBMITTED,
-                                    "Email confirmed and terms accepted - entering approval chain");
+                        function("onSubmitted", (StageInput in) -> {
+                            approvals.transitionTo(in.requestId(), ApprovalState.SUBMITTED,
+                                    "Confirmation received - entering approval chain");
                             return in;
                         }),
 
-                        // -------- Stage 2: wait for approval group 1
-                        tryCatch(
-                                "group1Stage",
-                                t -> t.tryCatch(function("awaitGroup1Decision",
-                                        (Group1Input in) -> awaitGroup1(in.requestId())))
+                        tryCatch("group1Stage",
+                                t -> t.tryCatch(function("awaitGroup1",
+                                        (StageInput in) -> doApproval(in.requestId(),
+                                                HumanTask.AssigneeGroup.GROUP_1,
+                                                "Approval by group 1",
+                                                ApprovalState.AWAITING_GROUP1_APPROVAL,
+                                                ERR_REJECTED_GROUP1)))
                                         .catchError(err -> err.type(ERR_REJECTED_GROUP1),
-                                                function("recordGroup1Rejection",
-                                                        (Group1Input in) -> {
-                                                            service.transitionTo(in.requestId(),
-                                                                    ApprovalState.REJECTED,
-                                                                    "Rejected by approval group 1");
-                                                            return new WorkflowOutput(in.requestId(), "REJECTED");
-                                                        })
+                                                function("finalizeRejectedG1",
+                                                        (StageInput in) -> finalizeRejected(in.requestId(),
+                                                                "Rejected by approval group 1"))
                                                         .then(FlowDirectiveEnum.END))),
 
-                        // -------- Stage 3: wait for approval group 2
-                        tryCatch(
-                                "group2Stage",
-                                t -> t.tryCatch(function("awaitGroup2Decision",
-                                        (Group2Input in) -> awaitGroup2(in.requestId())))
+                        tryCatch("group2Stage",
+                                t -> t.tryCatch(function("awaitGroup2",
+                                        (StageInput in) -> doApproval(in.requestId(),
+                                                HumanTask.AssigneeGroup.GROUP_2,
+                                                "Approval by group 2",
+                                                ApprovalState.AWAITING_GROUP2_APPROVAL,
+                                                ERR_REJECTED_GROUP2)))
                                         .catchError(err -> err.type(ERR_REJECTED_GROUP2),
-                                                function("recordGroup2Rejection",
-                                                        (Group2Input in) -> {
-                                                            service.transitionTo(in.requestId(),
-                                                                    ApprovalState.REJECTED,
-                                                                    "Rejected by approval group 2");
-                                                            return new WorkflowOutput(in.requestId(), "REJECTED");
-                                                        })
+                                                function("finalizeRejectedG2",
+                                                        (StageInput in) -> finalizeRejected(in.requestId(),
+                                                                "Rejected by approval group 2"))
                                                         .then(FlowDirectiveEnum.END))),
 
-                        // -------- Stage 4: final approval
-                        function("finalApproval", (Group2Input in) -> {
-                            service.transitionTo(in.requestId(), ApprovalState.APPROVED,
+                        function("finalApproval", (StageInput in) -> {
+                            approvals.transitionTo(in.requestId(), ApprovalState.APPROVED,
                                     "Approved by both approval groups");
+                            approvals.recordOutcome(in.requestId(), "APPROVED");
                             return new WorkflowOutput(in.requestId(), "APPROVED");
                         }))
                 .build();
     }
 
-    private Group1Input awaitConfirmation(String requestId) {
-        // The request is already in AWAITING_CONFIRMATION (set on creation),
-        // so we just block here until the requester confirms via REST.
-        ApprovalService.ConfirmationResult res = service.awaitConfirmation(requestId);
-        log.info("Workflow {} confirmation result: {}", requestId, res);
-        if (!res.confirmed()) {
+    private StageInput doConfirmation(String requestId) {
+        approvals.transitionTo(requestId, ApprovalState.AWAITING_CONFIRMATION,
+                "Waiting for requester to confirm email and accept terms");
+        String token = newToken();
+        HumanTask task = tasks.create(requestId,
+                HumanTask.Type.CONFIRMATION,
+                "Confirm email & accept terms",
+                HumanTask.AssigneeGroup.REQUESTER,
+                Map.of("confirmationToken", token));
+
+        TaskResult result = tasks.await(task);
+        log.info("Workflow {} confirmation result: {}", requestId, result);
+        if (!"CONFIRMED".equals(result.outcome())) {
             throw new WorkflowException(WorkflowError.error(ERR_CONFIRMATION_DECLINED, 410).build());
         }
-        return new Group1Input(requestId);
+        approvals.appendHistory(requestId, "CONFIRMED",
+                "Email confirmed and terms accepted by requester");
+        return new StageInput(requestId);
     }
 
-    private Group2Input awaitGroup1(String requestId) {
-        service.transitionTo(requestId, ApprovalState.AWAITING_GROUP1_APPROVAL,
-                "Waiting for approval group 1 decision");
-        Decision d = service.awaitDecision(requestId, ApprovalGroup.GROUP_1);
-        log.info("Workflow {} received group1 decision: {}", requestId, d);
-        if (d == Decision.REJECTED) {
-            throw new WorkflowException(WorkflowError.error(ERR_REJECTED_GROUP1, 409).build());
+    private StageInput doApproval(String requestId, HumanTask.AssigneeGroup group,
+                                  String name, ApprovalState waitingState, String errType) {
+        approvals.transitionTo(requestId, waitingState, "Waiting for " + group + " decision");
+        HumanTask task = tasks.create(requestId,
+                HumanTask.Type.APPROVAL, name, group, Map.of());
+
+        TaskResult result = tasks.await(task);
+        log.info("Workflow {} {} result: {}", requestId, group, result);
+        approvals.appendHistory(requestId, group + "_" + result.outcome(),
+                group + " (" + result.actor() + ") decided: " + result.outcome());
+        if ("REJECTED".equals(result.outcome())) {
+            throw new WorkflowException(WorkflowError.error(errType, 409).build());
         }
-        return new Group2Input(requestId);
+        return new StageInput(requestId);
     }
 
-    private Group2Input awaitGroup2(String requestId) {
-        service.transitionTo(requestId, ApprovalState.AWAITING_GROUP2_APPROVAL,
-                "Waiting for approval group 2 decision");
-        Decision d = service.awaitDecision(requestId, ApprovalGroup.GROUP_2);
-        log.info("Workflow {} received group2 decision: {}", requestId, d);
-        if (d == Decision.REJECTED) {
-            throw new WorkflowException(WorkflowError.error(ERR_REJECTED_GROUP2, 409).build());
-        }
-        return new Group2Input(requestId);
+    private WorkflowOutput finalizeRejected(String requestId, String reason) {
+        approvals.transitionTo(requestId, ApprovalState.REJECTED, reason);
+        approvals.recordOutcome(requestId, "REJECTED");
+        return new WorkflowOutput(requestId, "REJECTED");
+    }
+
+    private static String newToken() {
+        byte[] buf = new byte[24];
+        RNG.nextBytes(buf);
+        return Base64.getUrlEncoder().withoutPadding().encodeToString(buf);
     }
 
     @RegisterForReflection
     public record WorkflowInput(String requestId) {}
 
     @RegisterForReflection
-    public record Group1Input(String requestId) {}
-
-    @RegisterForReflection
-    public record Group2Input(String requestId) {}
+    public record StageInput(String requestId) {}
 
     @RegisterForReflection
     public record WorkflowOutput(String requestId, String outcome) {}

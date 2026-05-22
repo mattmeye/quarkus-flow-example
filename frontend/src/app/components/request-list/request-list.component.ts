@@ -4,9 +4,7 @@ import { Router, RouterLink } from '@angular/router';
 import { Subscription } from 'rxjs';
 import { ApprovalService } from '../../services/approval.service';
 import { ApprovalEventsService } from '../../services/approval-events.service';
-import {
-  ApprovalRequest, CreatedResponse, stateBadgeClass, stateLabel
-} from '../../models/approval.model';
+import { ApprovalRequest, stateBadgeClass, stateLabel } from '../../models/approval.model';
 import { RequestFormComponent } from '../request-form/request-form.component';
 
 @Component({
@@ -33,17 +31,17 @@ import { RequestFormComponent } from '../request-form/request-form.component';
         <thead>
           <tr>
             <th>Subject</th><th>Requester</th><th>Email</th><th>State</th>
-            <th>Group 1</th><th>Group 2</th><th>Created</th><th></th>
+            <th>Open tasks</th><th>Outcome</th><th>Created</th><th></th>
           </tr>
         </thead>
         <tbody>
           <tr *ngFor="let r of requests()" [routerLink]="['/requests', r.id]">
             <td>{{ r.subject }}</td>
             <td>{{ r.requester }}</td>
-            <td>{{ r.email }} <span *ngIf="r.emailConfirmed" title="email confirmed">✓</span></td>
+            <td>{{ r.email }}</td>
             <td><span [class]="stateClass(r.state)">{{ label(r.state) }}</span></td>
-            <td>{{ r.group1Decision ?? '—' }}</td>
-            <td>{{ r.group2Decision ?? '—' }}</td>
+            <td>{{ openCount(r) }}</td>
+            <td>{{ r.outcome ?? '—' }}</td>
             <td>{{ r.createdAt | date:'short' }}</td>
             <td><a [routerLink]="['/requests', r.id]">Open →</a></td>
           </tr>
@@ -80,17 +78,19 @@ export class RequestListComponent implements OnInit, OnDestroy {
   }
 
   reload(): void {
-    this.api.list().subscribe({
+    this.api.listRequests().subscribe({
       next: r => this.requests.set(r),
       error: err => console.error(err)
     });
   }
 
-  onCreated(r: CreatedResponse): void {
+  openCount(r: ApprovalRequest): number {
+    return r.tasks.filter(t => t.status === 'PENDING').length;
+  }
+
+  onCreated(r: ApprovalRequest): void {
     this.reload();
-    // jump straight into the detail view so the requester can complete the
-    // email/terms confirmation step
-    this.router.navigate(['/requests', r.request.id]);
+    this.router.navigate(['/requests', r.id]);
   }
 
   stateClass = stateBadgeClass;

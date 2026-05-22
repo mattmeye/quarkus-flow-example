@@ -1,9 +1,11 @@
 import { Injectable } from '@angular/core';
-import { HttpClient } from '@angular/common/http';
+import { HttpClient, HttpParams } from '@angular/common/http';
 import { Observable } from 'rxjs';
-import { ApprovalRequest, CreatedResponse, Decision } from '../models/approval.model';
+import {
+  ApprovalRequest, AssigneeGroup, HumanTask, TaskStatus
+} from '../models/approval.model';
 
-const API = 'http://localhost:8080/api/approvals';
+const API = 'http://localhost:8080/api';
 
 export interface CreatePayload {
   requester: string;
@@ -13,37 +15,56 @@ export interface CreatePayload {
   termsAcknowledged: boolean;
 }
 
+export interface TaskFilter {
+  status?: TaskStatus;
+  group?: AssigneeGroup;
+  requestId?: string;
+}
+
 @Injectable({ providedIn: 'root' })
 export class ApprovalService {
   constructor(private http: HttpClient) {}
 
-  list(): Observable<ApprovalRequest[]> {
-    return this.http.get<ApprovalRequest[]>(API);
+  // ----- requests -----
+
+  listRequests(): Observable<ApprovalRequest[]> {
+    return this.http.get<ApprovalRequest[]>(`${API}/requests`);
   }
 
-  get(id: string): Observable<ApprovalRequest> {
-    return this.http.get<ApprovalRequest>(`${API}/${id}`);
+  getRequest(id: string): Observable<ApprovalRequest> {
+    return this.http.get<ApprovalRequest>(`${API}/requests/${id}`);
   }
 
-  create(req: CreatePayload): Observable<CreatedResponse> {
-    return this.http.post<CreatedResponse>(API, req);
+  createRequest(req: CreatePayload): Observable<ApprovalRequest> {
+    return this.http.post<ApprovalRequest>(`${API}/requests`, req);
   }
 
-  confirm(id: string, token: string, termsAccepted: boolean): Observable<ApprovalRequest> {
-    return this.http.post<ApprovalRequest>(
-      `${API}/${id}/confirm`,
-      { token, termsAccepted }
+  // ----- tasks (generic) -----
+
+  listTasks(filter: TaskFilter = {}): Observable<HumanTask[]> {
+    let params = new HttpParams();
+    if (filter.status) params = params.set('status', filter.status);
+    if (filter.group) params = params.set('group', filter.group);
+    if (filter.requestId) params = params.set('requestId', filter.requestId);
+    return this.http.get<HumanTask[]>(`${API}/tasks`, { params });
+  }
+
+  getTask(id: string): Observable<HumanTask> {
+    return this.http.get<HumanTask>(`${API}/tasks/${id}`);
+  }
+
+  completeTask(id: string, actor: string, outcome: string,
+               payload: Record<string, unknown> = {}): Observable<HumanTask> {
+    return this.http.post<HumanTask>(
+      `${API}/tasks/${id}/complete`,
+      { actor, outcome, payload }
     );
   }
 
-  cancel(id: string): Observable<ApprovalRequest> {
-    return this.http.post<ApprovalRequest>(`${API}/${id}/cancel`, {});
-  }
-
-  decide(id: string, group: 1 | 2, approver: string, decision: Decision): Observable<ApprovalRequest> {
-    return this.http.post<ApprovalRequest>(
-      `${API}/${id}/group${group}/decision`,
-      { approver, decision }
+  cancelTask(id: string, actor: string, reason: string): Observable<HumanTask> {
+    return this.http.post<HumanTask>(
+      `${API}/tasks/${id}/cancel`,
+      { actor, reason }
     );
   }
 }

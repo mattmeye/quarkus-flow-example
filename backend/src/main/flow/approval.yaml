@@ -1,79 +1,83 @@
 #
 # CNCF Serverless Workflow DSL 1.0.0 - Reference definition of the
-# three-stage approval flow with an asynchronous email/terms
-# confirmation step before the approval chain. The Java DSL workflow
-# in `ApprovalWorkflow.java` is the runtime source of truth; this
-# YAML file documents the same workflow topology in declarative form.
+# task-based approval flow. Every async wait step is modelled as a
+# generic "human task" managed by TaskService; the runtime source of
+# truth lives in ApprovalWorkflow.java.
 #
 document:
   dsl: 1.0.0
   namespace: approval-demo
   name: approval
-  version: 0.1.0
+  version: 0.2.0
 
 do:
-  # Stage 0 - requester must confirm email + accept terms (async)
-  - awaitConfirmation:
+  # ----- Stage 0: email + terms confirmation -----
+  - awaitConfirmationTask:
       call: function
       with:
-        name: awaitConfirmation
+        name: createAndAwaitTask
+        type: CONFIRMATION
+        assignee: REQUESTER
+        name: 'Confirm email & accept terms'
       then: evaluateConfirmation
 
   - evaluateConfirmation:
       switch:
         - confirmed:
-            when: '.confirmed == true'
-            then: submitted
+            when: '.outcome == "CONFIRMED"'
+            then: awaitGroup1Task
         - declined:
-            when: '.confirmed == false'
+            when: '.outcome == "CANCELLED"'
             then: rejected
 
-  - submitted:
+  # ----- Stage 1: approval group 1 -----
+  - awaitGroup1Task:
       call: function
       with:
-        name: onSubmitted
-      then: awaitGroup1Decision
-
-  # Stage 1 - approval group 1
-  - awaitGroup1Decision:
-      call: function
-      with:
-        name: awaitGroup1Decision
+        name: createAndAwaitTask
+        type: APPROVAL
+        assignee: GROUP_1
+        name: 'Approval by group 1'
       then: evaluateGroup1
 
   - evaluateGroup1:
       switch:
         - approved:
-            when: '.group1Decision == "APPROVED"'
-            then: awaitGroup2Decision
+            when: '.outcome == "APPROVED"'
+            then: awaitGroup2Task
         - rejected:
-            when: '.group1Decision == "REJECTED"'
+            when: '.outcome == "REJECTED"'
             then: rejected
 
-  # Stage 2 - approval group 2
-  - awaitGroup2Decision:
+  # ----- Stage 2: approval group 2 -----
+  - awaitGroup2Task:
       call: function
       with:
-        name: awaitGroup2Decision
+        name: createAndAwaitTask
+        type: APPROVAL
+        assignee: GROUP_2
+        name: 'Approval by group 2'
       then: evaluateGroup2
 
   - evaluateGroup2:
       switch:
         - approved:
-            when: '.group2Decision == "APPROVED"'
+            when: '.outcome == "APPROVED"'
             then: approved
         - rejected:
-            when: '.group2Decision == "REJECTED"'
+            when: '.outcome == "REJECTED"'
             then: rejected
 
   - approved:
       call: function
       with:
-        name: markApproved
+        name: finalize
+        outcome: APPROVED
       then: end
 
   - rejected:
       call: function
       with:
-        name: markRejected
+        name: finalize
+        outcome: REJECTED
       then: end

@@ -1,6 +1,7 @@
 package com.example.approval;
 
 import io.quarkus.test.junit.QuarkusTest;
+import io.restassured.common.mapper.TypeRef;
 import org.junit.jupiter.api.Test;
 
 import static io.restassured.RestAssured.given;
@@ -9,95 +10,130 @@ import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.notNullValue;
 
 import java.time.Duration;
+import java.util.List;
 import java.util.Map;
 
 @QuarkusTest
 class ApprovalFlowTest {
 
     @Test
-    void happyPathConfirmAndApproveByBothGroups() {
-        String id = submitRequest("alice@example.com", "Need access");
-        assertState(id, "AWAITING_CONFIRMATION");
-        String token = given().when().get("/api/approvals/" + id)
-                .then().statusCode(200).extract().path("confirmationToken");
+    void happyPathThroughAllThreeTasks() {
+        String id = submit("alice@example.com", "Need access");
 
-        confirm(id, token, true);
+        // confirmation task
+        var confirmation = waitForTask(id, "CONFIRMATION", "REQUESTER");
+        String token = (String) confirmation.get("context").toString().contains("confirmationToken")
+                ? ((Map<?,?>) confirmation.get("context")).get("confirmationToken").toString()
+                : null;
+        complete(confirmation.get("id").toString(), "alice", "CONFIRMED",
+                Map.of("token", token, "termsAccepted", true));
         awaitState(id, "AWAITING_GROUP1_APPROVAL");
 
-        decide(id, 1, "bob-g1", "APPROVED");
+        // group 1 task
+        var g1 = waitForTask(id, "APPROVAL", "GROUP_1");
+        complete(g1.get("id").toString(), "bob-g1", "APPROVED", Map.of());
         awaitState(id, "AWAITING_GROUP2_APPROVAL");
 
-        decide(id, 2, "carol-g2", "APPROVED");
+        // group 2 task
+        var g2 = waitForTask(id, "APPROVAL", "GROUP_2");
+        complete(g2.get("id").toString(), "carol-g2", "APPROVED", Map.of());
         awaitState(id, "APPROVED");
+
+        // verify outcome and that all tasks are now COMPLETED
+        given().when().get("/api/requests/" + id)
+                .then().statusCode(200)
+                .body("outcome", equalTo("APPROVED"))
+                .body("tasks.size()", equalTo(3))
+                .body("tasks.status", equalTo(List.of("COMPLETED", "COMPLETED", "COMPLETED")));
     }
 
     @Test
-    void rejectionAtConfirmationStepEndsAsRejected() {
-        String id = submitRequest("ed@example.com", "Forget about it");
-        assertState(id, "AWAITING_CONFIRMATION");
+    void cancellingConfirmationTaskRejectsTheRequest() {
+        String id = submit("ed@example.com", "Forget it");
+        var task = waitForTask(id, "CONFIRMATION", "REQUESTER");
 
-        given().when().post("/api/approvals/" + id + "/cancel")
+        given().contentType("application/json")
+                .body(Map.of("actor", "ed", "reason", "changed my mind"))
+                .when().post("/api/tasks/" + task.get("id") + "/cancel")
                 .then().statusCode(200);
 
         awaitState(id, "REJECTED");
     }
 
     @Test
-    void rejectionByGroup1EndsAsRejected() {
-        String id = submitRequest("frank@example.com", "Probably not");
-        String token = given().when().get("/api/approvals/" + id)
-                .then().extract().path("confirmationToken");
+    void rejectingAtGroup1EndsTheFlow() {
+        String id = submit("frank@example.com", "Maybe");
+        confirmFirstTask(id);
+        var g1 = waitForTask(id, "APPROVAL", "GROUP_1");
+        complete(g1.get("id").toString(), "g1-no", "REJECTED", Map.of());
+        awaitState(id, "REJECTED");
 
-        confirm(id, token, true);
-        awaitState(id, "AWAITING_GROUP1_APPROVAL");
+        // group 2 task must never have been created
+        given().queryParam("requestId", id)
+                .queryParam("group", "GROUP_2")
+                .when().get("/api/tasks")
+                .then().statusCode(200)
+                .body("size()", equalTo(0));
+    }
 
-        decide(id, 1, "g1-rejecter", "REJECTED");
+    @Test
+    void rejectingAtGroup2EndsTheFlow() {
+        String id = submit("gina@example.com", "Tight");
+        confirmFirstTask(id);
+
+        var g1 = waitForTask(id, "APPROVAL", "GROUP_1");
+        complete(g1.get("id").toString(), "g1-ok", "APPROVED", Map.of());
+
+        var g2 = waitForTask(id, "APPROVAL", "GROUP_2");
+        complete(g2.get("id").toString(), "g2-no", "REJECTED", Map.of());
         awaitState(id, "REJECTED");
     }
 
     @Test
-    void rejectionByGroup2EndsAsRejected() {
-        String id = submitRequest("gina@example.com", "Borderline");
-        String token = given().when().get("/api/approvals/" + id)
-                .then().extract().path("confirmationToken");
-
-        confirm(id, token, true);
-        awaitState(id, "AWAITING_GROUP1_APPROVAL");
-
-        decide(id, 1, "g1-ok", "APPROVED");
-        awaitState(id, "AWAITING_GROUP2_APPROVAL");
-
-        decide(id, 2, "g2-no", "REJECTED");
-        awaitState(id, "REJECTED");
-    }
-
-    @Test
-    void confirmingWithWrongTokenIsRejected() {
-        String id = submitRequest("hank@example.com", "Bad token");
+    void completingWithWrongTokenIsRejected() {
+        String id = submit("hank@example.com", "Bad token");
+        var task = waitForTask(id, "CONFIRMATION", "REQUESTER");
         given().contentType("application/json")
-                .body(Map.of("token", "not-the-right-token", "termsAccepted", true))
-                .when().post("/api/approvals/" + id + "/confirm")
-                .then().statusCode(404);
-    }
-
-    @Test
-    void confirmingWithoutAcceptingTermsIsRejected() {
-        String id = submitRequest("ivy@example.com", "No terms");
-        String token = given().when().get("/api/approvals/" + id)
-                .then().extract().path("confirmationToken");
-        given().contentType("application/json")
-                .body(Map.of("token", token, "termsAccepted", false))
-                .when().post("/api/approvals/" + id + "/confirm")
+                .body(Map.of("actor", "hank", "outcome", "CONFIRMED",
+                        "payload", Map.of("token", "wrong", "termsAccepted", true)))
+                .when().post("/api/tasks/" + task.get("id") + "/complete")
                 .then().statusCode(400);
     }
 
     @Test
-    void submitMissingFieldsIsRejected() {
+    void completingWithoutAcceptingTermsIsRejected() {
+        String id = submit("ivy@example.com", "No terms");
+        var task = waitForTask(id, "CONFIRMATION", "REQUESTER");
+        String token = ((Map<?,?>) task.get("context")).get("confirmationToken").toString();
         given().contentType("application/json")
-                .body(Map.of("requester", "x", "email", "x@y.z", "subject", "s",
-                        "termsAcknowledged", false))
-                .when().post("/api/approvals")
+                .body(Map.of("actor", "ivy", "outcome", "CONFIRMED",
+                        "payload", Map.of("token", token, "termsAccepted", false)))
+                .when().post("/api/tasks/" + task.get("id") + "/complete")
                 .then().statusCode(400);
+    }
+
+    @Test
+    void invalidOutcomeIsRejected() {
+        String id = submit("jane@example.com", "Bad outcome");
+        var task = waitForTask(id, "CONFIRMATION", "REQUESTER");
+        given().contentType("application/json")
+                .body(Map.of("actor", "jane", "outcome", "GIBBERISH", "payload", Map.of()))
+                .when().post("/api/tasks/" + task.get("id") + "/complete")
+                .then().statusCode(400);
+    }
+
+    @Test
+    void completingTwiceConflicts() {
+        String id = submit("kev@example.com", "Twice");
+        var task = waitForTask(id, "CONFIRMATION", "REQUESTER");
+        String token = ((Map<?,?>) task.get("context")).get("confirmationToken").toString();
+        complete(task.get("id").toString(), "kev", "CONFIRMED",
+                Map.of("token", token, "termsAccepted", true));
+        given().contentType("application/json")
+                .body(Map.of("actor", "kev", "outcome", "CONFIRMED",
+                        "payload", Map.of("token", token, "termsAccepted", true)))
+                .when().post("/api/tasks/" + task.get("id") + "/complete")
+                .then().statusCode(409);
     }
 
     @Test
@@ -105,13 +141,13 @@ class ApprovalFlowTest {
         given().contentType("application/json")
                 .body(Map.of("requester", "x", "email", "not-an-email", "subject", "s",
                         "termsAcknowledged", true))
-                .when().post("/api/approvals")
+                .when().post("/api/requests")
                 .then().statusCode(400);
     }
 
     // ----- helpers -----
 
-    private String submitRequest(String email, String subject) {
+    private String submit(String email, String subject) {
         return given().contentType("application/json")
                 .body(Map.of(
                         "requester", "tester",
@@ -119,34 +155,51 @@ class ApprovalFlowTest {
                         "subject", subject,
                         "description", "auto-test",
                         "termsAcknowledged", true))
-                .when().post("/api/approvals")
+                .when().post("/api/requests")
                 .then().statusCode(201)
-                .body("request.id", notNullValue())
-                .extract().path("request.id");
+                .body("id", notNullValue())
+                .body("state", equalTo("AWAITING_CONFIRMATION"))
+                .extract().path("id");
     }
 
-    private void confirm(String id, String token, boolean terms) {
+    private void confirmFirstTask(String requestId) {
+        var task = waitForTask(requestId, "CONFIRMATION", "REQUESTER");
+        String token = ((Map<?,?>) task.get("context")).get("confirmationToken").toString();
+        complete(task.get("id").toString(), "tester", "CONFIRMED",
+                Map.of("token", token, "termsAccepted", true));
+    }
+
+    private Map<String, Object> waitForTask(String requestId, String type, String group) {
+        final Map<String, Object>[] holder = new Map[1];
+        await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> {
+            List<Map<String, Object>> list = given()
+                    .queryParam("requestId", requestId)
+                    .queryParam("status", "PENDING")
+                    .queryParam("group", group)
+                    .when().get("/api/tasks")
+                    .then().statusCode(200)
+                    .extract().as(new TypeRef<List<Map<String, Object>>>() {});
+            Map<String, Object> match = list.stream()
+                    .filter(t -> type.equals(t.get("type")))
+                    .findFirst().orElse(null);
+            if (match == null) {
+                throw new AssertionError("No pending " + type + " task for " + group);
+            }
+            holder[0] = match;
+        });
+        return holder[0];
+    }
+
+    private void complete(String taskId, String actor, String outcome, Map<String, Object> payload) {
         given().contentType("application/json")
-                .body(Map.of("token", token, "termsAccepted", terms))
-                .when().post("/api/approvals/" + id + "/confirm")
+                .body(Map.of("actor", actor, "outcome", outcome, "payload", payload))
+                .when().post("/api/tasks/" + taskId + "/complete")
                 .then().statusCode(200);
-    }
-
-    private void decide(String id, int group, String approver, String decision) {
-        given().contentType("application/json")
-                .body(Map.of("approver", approver, "decision", decision))
-                .when().post("/api/approvals/" + id + "/group" + group + "/decision")
-                .then().statusCode(200);
-    }
-
-    private void assertState(String id, String state) {
-        given().when().get("/api/approvals/" + id)
-                .then().statusCode(200).body("state", equalTo(state));
     }
 
     private void awaitState(String id, String state) {
         await().atMost(Duration.ofSeconds(5)).untilAsserted(() ->
-                given().when().get("/api/approvals/" + id)
+                given().when().get("/api/requests/" + id)
                         .then().statusCode(200).body("state", equalTo(state)));
     }
 }

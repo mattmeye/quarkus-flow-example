@@ -2,7 +2,7 @@ import { CommonModule } from '@angular/common';
 import { Component, EventEmitter, Output, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { ApprovalService } from '../../services/approval.service';
-import { CreatedResponse } from '../../models/approval.model';
+import { ApprovalRequest } from '../../models/approval.model';
 
 @Component({
   selector: 'app-request-form',
@@ -34,7 +34,7 @@ import { CreatedResponse } from '../../models/approval.model';
         <label class="check">
           <input type="checkbox" [(ngModel)]="termsAcknowledged" />
           <span>
-            I have read and I acknowledge the <a href="#" (click)="$event.preventDefault()">Terms &amp; Conditions</a>.
+            I have read and acknowledge the <a href="#" (click)="$event.preventDefault()">Terms &amp; Conditions</a>.
             I will be asked to confirm them again via the email verification step.
           </span>
         </label>
@@ -42,8 +42,8 @@ import { CreatedResponse } from '../../models/approval.model';
       <div *ngIf="error()" class="err">{{ error() }}</div>
       <div class="row" style="margin-top: 0.8rem;">
         <span style="color: var(--fg-muted); font-size: 12px;">
-          After submitting we send a confirmation email; the workflow only
-          continues once the requester clicks the link.
+          After submitting, the workflow creates a CONFIRMATION task that
+          stays open until the requester confirms via email.
         </span>
         <span class="spacer"></span>
         <button (click)="submit()" [disabled]="!canSubmit() || submitting()">
@@ -63,7 +63,7 @@ import { CreatedResponse } from '../../models/approval.model';
   `]
 })
 export class RequestFormComponent {
-  @Output() created = new EventEmitter<CreatedResponse>();
+  @Output() created = new EventEmitter<ApprovalRequest>();
   requester = signal('');
   email = signal('');
   subject = signal('');
@@ -85,7 +85,7 @@ export class RequestFormComponent {
   submit(): void {
     this.error.set(null);
     this.submitting.set(true);
-    this.api.create({
+    this.api.createRequest({
       requester: this.requester(),
       email: this.email(),
       subject: this.subject(),
