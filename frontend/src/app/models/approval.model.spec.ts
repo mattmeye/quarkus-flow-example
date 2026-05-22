@@ -1,3 +1,4 @@
+import { describe, expect, it } from 'vitest';
 import { stateBadgeClass, stateLabel, ApprovalState } from './approval.model';
 
 describe('approval.model helpers', () => {

@@ -37,6 +37,7 @@ public class TaskResource {
             HumanTask.AssigneeGroup assigneeGroup,
             HumanTask.Status status,
             Instant createdAt, Instant completedAt,
+            Instant dueAt, Instant reminderAt, boolean reminded,
             Map<String, Object> context,
             String actor, String outcome,
             Map<String, Object> payload) {}
@@ -112,6 +113,7 @@ public class TaskResource {
                 t.getType(), t.getName(),
                 t.getAssigneeGroup(), t.getStatus(),
                 t.getCreatedAt(), t.getCompletedAt(),
+                t.getDueAt(), t.getReminderAt(), t.isReminded(),
                 t.getContext(),
                 r == null ? null : r.actor(),
                 r == null ? null : r.outcome(),

@@ -38,4 +38,15 @@ public record ApprovalEvent(
         return new ApprovalEvent("TASK_COMPLETED", t.getRequestId(), t.getId(),
                 null, msg, Instant.now());
     }
+
+    public static ApprovalEvent taskReminder(HumanTask t) {
+        return new ApprovalEvent("TASK_REMINDER", t.getRequestId(), t.getId(),
+                null, "Reminder: " + t.getName() + " is due at " + t.getDueAt(),
+                Instant.now());
+    }
+
+    public static ApprovalEvent taskExpired(HumanTask t) {
+        return new ApprovalEvent("TASK_EXPIRED", t.getRequestId(), t.getId(),
+                null, "Task expired: " + t.getName(), Instant.now());
+    }
 }

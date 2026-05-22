@@ -1,7 +1,7 @@
 version: '3'
 
 # Single entry-point for development and CI on this repository.
-# Prerequisites: `mise install` (or have Java 17, Maven, Node 20 on PATH).
+# Prerequisites: `mise install` (or have Java 25, Maven, Node 22 on PATH).
 # Run `task --list` to see available tasks.
 
 vars:

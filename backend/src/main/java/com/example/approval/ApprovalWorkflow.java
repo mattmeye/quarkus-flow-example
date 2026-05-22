@@ -130,7 +130,8 @@ public class ApprovalWorkflow extends Flow {
         log.info("Workflow {} {} result: {}", requestId, group, result);
         approvals.appendHistory(requestId, group + "_" + result.outcome(),
                 group + " (" + result.actor() + ") decided: " + result.outcome());
-        if ("REJECTED".equals(result.outcome())) {
+        if (!"APPROVED".equals(result.outcome())) {
+            // REJECTED, EXPIRED and CANCELLED all funnel into the rejection branch.
             throw new WorkflowException(WorkflowError.error(errType, 409).build());
         }
         return new StageInput(requestId);

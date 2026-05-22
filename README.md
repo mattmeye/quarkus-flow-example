@@ -10,6 +10,10 @@ End-to-end demo of a multi-stage approval workflow:
 3. **Approval group 2** — only entered if group 1 approved; the workflow is
    suspended until group 2 decides.
 4. **Terminal** — `APPROVED` if both groups approved, otherwise `REJECTED`.
+   Each `HumanTask` carries a per-type deadline; if the deadline elapses
+   without a decision a scheduled sweep first fires a one-shot reminder
+   and then expires the task (synthetic `outcome = EXPIRED`, actor
+   `SYSTEM`), which drives the request to `REJECTED`.
 
 ### End-to-end flow
 
@@ -18,10 +22,13 @@ flowchart LR
     Start([New request]) --> Conf{Confirm<br/>email + terms?}
     Conf -- confirmed --> G1{Group 1<br/>decision?}
     Conf -- cancelled --> Rej([REJECTED])
+    Conf -. expired .-> Rej
     G1 -- approve --> G2{Group 2<br/>decision?}
     G1 -- reject --> Rej
+    G1 -. expired .-> Rej
     G2 -- approve --> Appr([APPROVED])
     G2 -- reject --> Rej
+    G2 -. expired .-> Rej
 
     classDef terminal fill:#14532d,stroke:#22c55e,color:#bbf7d0
     classDef reject   fill:#7f1d1d,stroke:#ef4444,color:#fecaca
@@ -43,9 +50,11 @@ implemented as wait tasks of the same `ApprovalWorkflow`:
 
 ```mermaid
 flowchart LR
-    Start([Request submitted]) --> CT["HumanTask<br/>type: CONFIRMATION<br/>assignee: REQUESTER<br/>context: { confirmationToken }"]
+    Start([Request submitted]) --> CT["HumanTask<br/>type: CONFIRMATION<br/>assignee: REQUESTER<br/>context: { confirmationToken }<br/>dueAt = now + confirmation.timeout"]
     CT -- "POST /api/tasks/{id}/complete<br/>outcome = CONFIRMED<br/>payload: { token, termsAccepted }" --> Ok([Hand over to<br/>Approval workflow])
     CT -- "POST /api/tasks/{id}/cancel" --> Rej([REJECTED])
+    CT -. "TaskService.sweep @ dueAt<br/>outcome = EXPIRED, actor = SYSTEM" .-> Rej
+    CT -. "TaskService.sweep @ reminderAt<br/>(reminded := true,<br/>TASK_REMINDER event,<br/>task stays PENDING)" .-> CT
     CT -. "400 - invalid token<br/>or terms not accepted" .-> CT
 
     classDef task     fill:#1e3a8a,stroke:#38bdf8,color:#bfdbfe
@@ -58,11 +67,13 @@ flowchart LR
 
 ```mermaid
 flowchart LR
-    Start([Confirmed request]) --> G1["HumanTask<br/>type: APPROVAL<br/>assignee: GROUP_1"]
-    G1 -- "outcome = APPROVED" --> G2["HumanTask<br/>type: APPROVAL<br/>assignee: GROUP_2"]
+    Start([Confirmed request]) --> G1["HumanTask<br/>type: APPROVAL<br/>assignee: GROUP_1<br/>dueAt = now + approval.timeout"]
+    G1 -- "outcome = APPROVED" --> G2["HumanTask<br/>type: APPROVAL<br/>assignee: GROUP_2<br/>dueAt = now + approval.timeout"]
     G1 -- "outcome = REJECTED" --> Rej([REJECTED])
+    G1 -. "sweep @ dueAt<br/>outcome = EXPIRED" .-> Rej
     G2 -- "outcome = APPROVED" --> Appr([APPROVED])
     G2 -- "outcome = REJECTED" --> Rej
+    G2 -. "sweep @ dueAt<br/>outcome = EXPIRED" .-> Rej
 
     classDef task     fill:#1e3a8a,stroke:#38bdf8,color:#bfdbfe
     classDef terminal fill:#14532d,stroke:#22c55e,color:#bbf7d0
@@ -80,12 +91,15 @@ type-agnostic.
 
 ```mermaid
 stateDiagram-v2
-    [*] --> PENDING : TaskService.create()
+    [*] --> PENDING : TaskService.create()<br/>(dueAt = now + timeout)
+    PENDING --> PENDING : sweep @ reminderAt<br/>(reminded := true,<br/>TASK_REMINDER event)
     PENDING --> COMPLETED : POST /complete<br/>(valid outcome)
     PENDING --> CANCELLED : POST /cancel
+    PENDING --> EXPIRED : sweep @ dueAt<br/>(actor = SYSTEM,<br/>outcome = EXPIRED,<br/>TASK_EXPIRED event)
     PENDING --> PENDING : POST /complete<br/>(invalid outcome,<br/>token or terms)
     COMPLETED --> [*]
     CANCELLED --> [*]
+    EXPIRED   --> [*]
 ```
 
 #### Happy-path interaction (REST + WebSocket)
@@ -131,10 +145,12 @@ sequenceDiagram
 
 | Layer    | Tech                                                              |
 | -------- | ----------------------------------------------------------------- |
-| Workflow | [Quarkus Flow](https://docs.quarkiverse.io/quarkus-flow/dev/) (CNCF Serverless Workflow DSL 1.0.0) via `io.quarkiverse.flow:quarkus-flow` |
-| Backend  | Quarkus 3.35 (REST + WebSocket)                                    |
-| Frontend | Angular 18 standalone components                                   |
+| Workflow | [Quarkus Flow](https://docs.quarkiverse.io/quarkus-flow/dev/) 0.9.0 (CNCF Serverless Workflow DSL 1.0.0) via `io.quarkiverse.flow:quarkus-flow`, on top of `io.serverlessworkflow` 7.21 |
+| Backend  | Quarkus 3.33 on Java 25 (REST + WebSocket)                         |
+| Frontend | Angular 21 — zoneless, standalone components, TypeScript 5.9      |
 | Transport | REST (commands) + WebSocket (live state events to the UI)         |
+| Testing  | JUnit 5 + RestAssured (backend), Vitest + jsdom (frontend)         |
+| CI / CD  | GitHub Actions (build, test, e2e, CodeQL, dependency-review) + Dependabot (Maven, npm, GitHub Actions) |
 
 The workflow is defined in two equivalent ways:
 * **Runtime source of truth:** Java DSL in
@@ -153,7 +169,7 @@ Tool versions are pinned with [mise](https://mise.jdx.dev) and orchestrated
 with [task](https://taskfile.dev):
 
 ```bash
-# one-time, installs Java 17, Maven, Node 20, Task into the project shell
+# one-time, installs Java 25, Maven, Node 22, Task into the project shell
 mise install
 
 # show all available tasks
@@ -198,7 +214,7 @@ cancelling tasks. No new REST routes are needed when stages are added.
 | GET    | `/api/tasks/{id}`                   | Get a single task                                      |
 | POST   | `/api/tasks/{id}/complete`          | Complete a task: `{ actor, outcome, payload }`         |
 | POST   | `/api/tasks/{id}/cancel`            | Cancel a pending task: `{ actor, reason }`             |
-| WS     | `/approval-events`                  | Server-pushed request- and task-lifecycle events       |
+| WS     | `/approval-events`                  | Server-pushed request- and task-lifecycle events (`REQUEST_CREATED`, `STATE_CHANGED`, `TASK_CREATED`, `TASK_COMPLETED`, `TASK_REMINDER`, `TASK_EXPIRED`) |
 
 Task types currently emitted by `ApprovalWorkflow`:
 
@@ -206,6 +222,34 @@ Task types currently emitted by `ApprovalWorkflow`:
 | -------------- | ---------- | --------------------- | -------------------------------- |
 | `CONFIRMATION` | `REQUESTER`| `CONFIRMED`, `CANCELLED` | `{ token, termsAccepted }` |
 | `APPROVAL`     | `GROUP_1`, `GROUP_2` | `APPROVED`, `REJECTED` | optional `{ reason }` |
+
+### Task deadlines, reminders and expiration
+
+Every `HumanTask` is created with a `dueAt` deadline (and a `reminderAt`
+timestamp computed as a fraction of the timeout). A periodic scheduler
+(`TaskService#sweep`, every second by default) walks all pending tasks
+and:
+
+1. Emits a one-shot **`TASK_REMINDER`** event when `now >= reminderAt`
+   (the task stays `PENDING`, but `reminded` flips to `true`).
+2. Marks the task **`EXPIRED`** (`status=EXPIRED`, `outcome=EXPIRED`,
+   `actor=SYSTEM`) once `now >= dueAt`, emits **`TASK_EXPIRED`**, and
+   completes the workflow future — which sends the request to
+   `REJECTED` via the same branch that handles non-`APPROVED`/non-
+   `CONFIRMED` outcomes.
+
+Defaults (configurable in `application.properties`):
+
+| Property                              | Default | Meaning                                         |
+| ------------------------------------- | ------- | ----------------------------------------------- |
+| `app.task.confirmation.timeout`       | `PT24H` | Deadline for `CONFIRMATION` tasks (ISO-8601).   |
+| `app.task.approval.timeout`           | `PT48H` | Deadline for `APPROVAL` tasks.                  |
+| `app.task.reminder.offset-fraction`   | `0.75`  | Reminder fires after this fraction of the window has elapsed (i.e. with 25% remaining). |
+| `app.task.sweep.every`                | `1s`    | Quarkus Scheduler interval for `TaskService#sweep`. |
+
+Each `TaskDto` exposes `dueAt`, `reminderAt`, `reminded` and the
+extended `status` (`PENDING | COMPLETED | CANCELLED | EXPIRED`) so the
+UI can render a countdown and a "Reminder sent" / "Expired" badge.
 
 ### Frontend
 
@@ -247,6 +291,30 @@ task e2e            # curl-based smoke test against a running stack
   wrong token and missing terms acceptance.
 * **Frontend** — `approval.model.spec.ts` and `approval.service.spec.ts`
   cover the state-helper functions and the HTTP service contracts using
-  Angular's `HttpTestingController`.
+  Angular's `HttpTestingController`. Tests run under [Vitest](https://vitest.dev)
+  in a jsdom environment via the Angular 21 `@angular/build:unit-test`
+  builder — no browser or Karma required.
 * **End-to-end** — `scripts/e2e-smoke.sh` drives the running stack from
   the outside via `curl` and verifies the terminal state.
+
+## CI / CD
+
+GitHub Actions workflows live in [`.github/workflows`](.github/workflows):
+
+| Workflow                | Trigger                          | What it does                                                                                  |
+| ----------------------- | -------------------------------- | --------------------------------------------------------------------------------------------- |
+| `ci.yml`                | push & PR to `main`, manual      | `backend` Maven build + JUnit5; `frontend` `ng build` + Karma; `e2e` smoke against the runner JAR; aggregated `ci-success` gate. |
+| `codeql.yml`            | push & PR to `main`, weekly cron | CodeQL static analysis for `java-kotlin` (Maven manual build) and `javascript-typescript`.    |
+| `dependency-review.yml` | PR to `main`                     | `actions/dependency-review-action`, fails on `high` severity advisories.                      |
+
+Dependency updates are managed by [Dependabot](.github/dependabot.yml) — weekly
+PRs (Mon 06:00 Europe/Berlin) for three ecosystems:
+
+* `maven` (`/backend`) — grouped: Quarkus, Quarkiverse, Serverlessworkflow,
+  Maven plugins, test deps.
+* `npm` (`/frontend`) — grouped: Angular, Karma/Jasmine, TypeScript.
+* `github-actions` (`/`) — all actions in one group.
+
+In-progress runs are auto-cancelled for the same ref via `concurrency`, and
+each job uploads its artifacts (Surefire reports, runner JAR, frontend
+`dist`, e2e Quarkus log) for post-mortem.

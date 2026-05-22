@@ -33,6 +33,7 @@ import { AssigneeGroup, HumanTask, TaskStatus, groupLabel } from '../../models/a
             <option ngValue="PENDING">pending</option>
             <option ngValue="COMPLETED">completed</option>
             <option ngValue="CANCELLED">cancelled</option>
+            <option ngValue="EXPIRED">expired</option>
             <option [ngValue]="null">all</option>
           </select>
         </label>
@@ -46,7 +47,7 @@ import { AssigneeGroup, HumanTask, TaskStatus, groupLabel } from '../../models/a
         <thead>
           <tr>
             <th>Created</th><th>Type</th><th>Name</th><th>Assignee</th>
-            <th>Status</th><th>Request</th>
+            <th>Due</th><th>Status</th><th>Request</th>
           </tr>
         </thead>
         <tbody>
@@ -55,6 +56,10 @@ import { AssigneeGroup, HumanTask, TaskStatus, groupLabel } from '../../models/a
             <td><code>{{ t.type }}</code></td>
             <td>{{ t.name }}</td>
             <td>{{ groupLabel(t.assigneeGroup) }}</td>
+            <td>
+              <span class="due">{{ t.dueAt | date:'mediumTime' }}</span>
+              <span *ngIf="t.status === 'PENDING' && t.reminded" class="reminded" title="Reminder sent">⏰</span>
+            </td>
             <td><span [class]="badgeFor(t)">{{ t.status }}</span></td>
             <td><a [routerLink]="['/requests', t.requestId]">{{ shortId(t.requestId) }}</a></td>
           </tr>
@@ -76,6 +81,8 @@ import { AssigneeGroup, HumanTask, TaskStatus, groupLabel } from '../../models/a
     tbody tr:hover { background: var(--bg-elev-2); }
     code { background: var(--bg-elev-2); padding: 1px 4px; border-radius: 3px; font-size: 11px; }
     a { color: var(--accent); text-decoration: none; }
+    .due { color: var(--fg-muted); font-size: 12px; }
+    .reminded { margin-left: 0.4rem; font-size: 13px; }
   `]
 })
 export class TaskInboxComponent implements OnInit, OnDestroy {
@@ -103,7 +110,8 @@ export class TaskInboxComponent implements OnInit, OnDestroy {
   }
 
   badgeFor(t: HumanTask): string {
-    if (t.status === 'PENDING') return 'badge awaiting1';
+    if (t.status === 'PENDING') return t.reminded ? 'badge awaiting2' : 'badge awaiting1';
+    if (t.status === 'EXPIRED') return 'badge rejected';
     if (t.outcome === 'REJECTED' || t.status === 'CANCELLED') return 'badge rejected';
     return 'badge approved';
   }
