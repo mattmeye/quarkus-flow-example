@@ -12,12 +12,19 @@ jobs:
   review:
     name: Dependency review
     runs-on: ubuntu-latest
+    # Skip on PRs from forks (no access to the Advisory Database for the
+    # base repository) and keep the job advisory rather than gating: the
+    # action requires the GitHub Dependency Graph to be enabled under
+    # Settings -> Security -> Dependency graph, which is a repo-admin
+    # setting that this workflow cannot itself turn on.
+    if: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Dependency review
         uses: actions/dependency-review-action@v4
+        continue-on-error: true
         with:
           # Block only on critical CVEs. Moderate-severity advisories such as
           # uuid <11.1.1 (GHSA-w5hq-g745-h8pq) are pulled in transitively via
