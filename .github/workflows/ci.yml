@@ -49,7 +49,9 @@ jobs:
         run: mvn -B -version
 
       - name: Build & test
-        run: mvn -B -ntp verify
+        run: mvn -B -ntp -e verify
+        env:
+          MAVEN_OPTS: "-Xmx2g"
 
       - name: Upload Surefire reports
         if: always()

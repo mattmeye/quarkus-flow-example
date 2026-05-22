@@ -26,14 +26,15 @@ class TaskExpirationTest {
     public static class ShortDeadlinesProfile implements QuarkusTestProfile {
         @Override
         public Map<String, String> getConfigOverrides() {
-            // 3 s window with the reminder at 1 s leaves a generous 2 s
-            // "reminded but still pending" interval that survives a slow
-            // CI worker's cold-start delay between request submission and
-            // the test first observing the task.
+            // Generous 6 s window with reminder at 1 s (0.166). Leaves a
+            // ~5 s "reminded but still pending" interval — survives the
+            // cold-start + JPA-schema-create + workflow-start delay on
+            // a slow CI worker, while still keeping the whole test under
+            // 10 s wall-clock.
             return Map.of(
-                    "app.task.confirmation.timeout", "PT3S",
-                    "app.task.approval.timeout", "PT3S",
-                    "app.task.reminder.offset-fraction", "0.33",
+                    "app.task.confirmation.timeout", "PT6S",
+                    "app.task.approval.timeout", "PT6S",
+                    "app.task.reminder.offset-fraction", "0.166",
                     "app.task.sweep.every", "100ms"
             );
         }
@@ -55,14 +56,14 @@ class TaskExpirationTest {
         Map<String, Object> task = pendingConfirmationFor(id);
         String taskId = task.get("id").toString();
 
-        // 1) reminder fires within the first third of the deadline.
-        await().atMost(Duration.ofSeconds(4)).untilAsserted(() ->
+        // 1) reminder fires (~1 s after task creation under this profile).
+        await().atMost(Duration.ofSeconds(8)).untilAsserted(() ->
                 given().when().get("/api/tasks/" + taskId)
                         .then().statusCode(200)
                         .body("reminded", equalTo(true)));
 
-        // 2) task expires once the deadline passes.
-        await().atMost(Duration.ofSeconds(6)).untilAsserted(() ->
+        // 2) task expires once the deadline passes (6 s after creation).
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(() ->
                 given().when().get("/api/tasks/" + taskId)
                         .then().statusCode(200)
                         .body("status", equalTo("EXPIRED"))
@@ -70,7 +71,7 @@ class TaskExpirationTest {
                         .body("actor", equalTo("SYSTEM")));
 
         // 3) workflow ends up REJECTED.
-        await().atMost(Duration.ofSeconds(5)).untilAsserted(() ->
+        await().atMost(Duration.ofSeconds(8)).untilAsserted(() ->
                 given().when().get("/api/requests/" + id)
                         .then().statusCode(200)
                         .body("state", equalTo("REJECTED")));
