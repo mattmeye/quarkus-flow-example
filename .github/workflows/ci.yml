@@ -48,8 +48,19 @@ jobs:
       - name: Verify Maven settings
         run: mvn -B -version
 
-      - name: Build & test
-        run: mvn -B -ntp verify
+      - name: Unit + integration tests
+        run: mvn -B -ntp -e test
+        env:
+          MAVEN_OPTS: "-Xmx2g"
+
+      - name: Dump Surefire failure logs (on test failure only)
+        if: failure()
+        run: |
+          echo "=== Failed test reports ==="
+          for f in target/surefire-reports/*.txt; do
+            grep -l "FAILURE\|ERROR\|<<<" "$f" 2>/dev/null && \
+              echo "--- $f ---" && cat "$f"
+          done
 
       - name: Upload Surefire reports
         if: always()
@@ -59,6 +70,11 @@ jobs:
           path: backend/target/surefire-reports
           if-no-files-found: ignore
           retention-days: 7
+
+      - name: Package runner JAR (separate so any augmentation failure is obvious)
+        run: mvn -B -ntp -e -DskipTests package
+        env:
+          MAVEN_OPTS: "-Xmx2g"
 
       - name: Upload Quarkus runner JAR
         if: success()
@@ -120,6 +136,27 @@ jobs:
     name: E2E smoke test
     runs-on: ubuntu-latest
     needs: [backend]
+    # Spin up a real PostgreSQL so the e2e covers the %prod datasource path
+    # rather than dev's local H2 file. The runner JAR defaults to the prod
+    # profile, which is exactly what we want to exercise here.
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: approval
+          POSTGRES_USER: approval
+          POSTGRES_PASSWORD: approval
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U approval -d approval"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      DB_URL: jdbc:postgresql://localhost:5432/approval
+      DB_USER: approval
+      DB_PASSWORD: approval
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -143,14 +180,14 @@ jobs:
         run: |
           nohup java -jar target/quarkus-app/quarkus-run.jar > quarkus.log 2>&1 &
           echo $! > quarkus.pid
-          for i in {1..60}; do
+          for i in {1..90}; do
             # /api/requests responds 200 with an empty list once the app is ready.
             if curl -fsS http://localhost:8080/api/requests >/dev/null 2>&1; then
-              echo "Quarkus is up"; exit 0
+              echo "Quarkus is up after ${i}s"; exit 0
             fi
             sleep 1
           done
-          echo "Quarkus failed to start within timeout"; tail -100 quarkus.log; exit 1
+          echo "Quarkus failed to start within timeout"; tail -200 quarkus.log; exit 1
 
       - name: Run smoke test
         run: bash scripts/e2e-smoke.sh

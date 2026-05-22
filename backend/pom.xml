@@ -76,6 +76,34 @@
             <version>${quarkus.flow.version}</version>
         </dependency>
 
+        <!-- Quarkus Flow persistence: workflow engine state goes to JPA
+             (transactional, cluster-friendly, survives restarts) instead
+             of the default local MVStore file. Combined with the JDBC
+             drivers below this swaps in H2 / Postgres on demand. -->
+        <dependency>
+            <groupId>io.quarkiverse.flow</groupId>
+            <artifactId>quarkus-flow-jpa</artifactId>
+            <version>${quarkus.flow.version}</version>
+        </dependency>
+
+        <!-- Application data (ApprovalRequest, HumanTask, HistoryEntry)
+             also lives in the same datasource via Hibernate ORM / Panache. -->
+        <dependency>
+            <groupId>io.quarkus</groupId>
+            <artifactId>quarkus-hibernate-orm-panache</artifactId>
+        </dependency>
+
+        <!-- JDBC drivers: H2 for dev / tests (zero-config in-memory),
+             PostgreSQL available for prod via the `%prod` profile. -->
+        <dependency>
+            <groupId>io.quarkus</groupId>
+            <artifactId>quarkus-jdbc-h2</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.quarkus</groupId>
+            <artifactId>quarkus-jdbc-postgresql</artifactId>
+        </dependency>
+
         <!-- Optional: GraphQL Subscriptions Alternative zum WebSocket -->
         <!-- <dependency>
             <groupId>io.quarkus</groupId>

@@ -147,6 +147,7 @@ sequenceDiagram
 | -------- | ----------------------------------------------------------------- |
 | Workflow | [Quarkus Flow](https://docs.quarkiverse.io/quarkus-flow/dev/) 0.9.0 (CNCF Serverless Workflow DSL 1.0.0) via `io.quarkiverse.flow:quarkus-flow`, on top of `io.serverlessworkflow` 7.21 |
 | Backend  | Quarkus 3.33 on Java 25 (REST + WebSocket)                         |
+| Persistence | Hibernate ORM / Panache for app data, `quarkus-flow-jpa` for engine state. H2 (file) dev default, PostgreSQL via `%prod` profile. |
 | Frontend | Angular 21 — zoneless, standalone components, TypeScript 5.9      |
 | Transport | REST (commands) + WebSocket (live state events to the UI)         |
 | Testing  | JUnit 5 + RestAssured (backend), Vitest + jsdom (frontend)         |
@@ -260,6 +261,44 @@ npm start               # http://localhost:4200
 ```
 
 CORS is pre-configured for `http://localhost:4200`.
+
+## Persistence
+
+Both layers of state live in the same JPA datasource so a restart never
+loses requests, tasks, history or workflow position:
+
+| Data | Owner | Tables |
+| --- | --- | --- |
+| `ApprovalRequest`, `HumanTask`, `HistoryEntry` (app data, including `dueAt` / `reminderAt` / `reminded`) | `ApprovalService` / `TaskService` as Panache `PanacheRepositoryBase` | `approval_request`, `approval_task`, `approval_history` |
+| Workflow engine state (running instances, completed tasks, retries, correlations) | `io.quarkiverse.flow:quarkus-flow-jpa` | `ProcessInstanceEntity`, `TaskInfoEntity`, `CompletedTaskEntity`, `RetriedTaskEntity` |
+
+The only piece of state that's intentionally JVM-scoped is the per-task
+`CompletableFuture<TaskResult>` the workflow blocks on in
+`TaskService.await(...)` — it's kept in an in-process `Map<String, CompletableFuture>`
+keyed by task id, since `CompletableFuture` isn't serialisable. Within a
+single JVM lifetime this future bridges the persisted entity transitions
+(`complete` / `cancel` / sweep-`expire`) to the workflow's blocking
+await. Across a restart, a workflow that was mid-await would need to be
+resumed via an event — out of scope for the demo.
+
+### Datasource
+
+Defaults (all configurable in [`application.properties`](backend/src/main/resources/application.properties)):
+
+| Profile | DB | URL |
+| --- | --- | --- |
+| `dev` (default) | H2 file | `jdbc:h2:file:./.h2/approval` — survives restarts, zero setup. |
+| `%test` | H2 in-memory | `jdbc:h2:mem:approval-test;DB_CLOSE_DELAY=-1`, schema dropped + recreated per boot. |
+| `%prod` | PostgreSQL | `${DB_URL:jdbc:postgresql://localhost:5432/approval}`, credentials via `DB_USER` / `DB_PASSWORD` env vars. |
+
+Hibernate's `schema-management.strategy` is `update` everywhere except
+the test profile (`drop-and-create`). The PostgreSQL JDBC driver ships
+in the runtime so no extra rebuild is needed when switching profiles.
+
+Quarkus Flow itself supports two additional persistence backends out of
+the box — `quarkus-flow-redis` and `quarkus-flow-durable-kubernetes`
+(K8s leader election + scheduler) — and ships an `EventPublisher` SPI
+for Kafka / AMQP / JMS / Pulsar via `quarkus-flow-messaging`.
 
 ## Try it end-to-end
 

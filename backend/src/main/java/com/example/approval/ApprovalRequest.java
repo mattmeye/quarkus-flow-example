@@ -1,30 +1,66 @@
 package com.example.approval;
 
+import jakarta.persistence.CascadeType;
+import jakarta.persistence.Column;
+import jakarta.persistence.Entity;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
+import jakarta.persistence.FetchType;
+import jakarta.persistence.Id;
+import jakarta.persistence.OneToMany;
+import jakarta.persistence.OrderBy;
+import jakarta.persistence.Table;
+
 import java.time.Instant;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
 import java.util.UUID;
 
 /**
  * The request as the workflow sees it. Stage-specific data
- * (confirmation token, group decisions, approvers) is no longer stored
- * here - it lives on the {@link HumanTask} instances that the workflow
- * creates at each async step.
+ * (confirmation token, group decisions, approvers) is not stored here —
+ * it lives on the {@link HumanTask} instances that the workflow creates
+ * at each async step.
+ *
+ * Persisted via Hibernate ORM / Panache so the request, its history and
+ * its tasks survive JVM restarts.
  */
+@Entity
+@Table(name = "approval_request")
 public class ApprovalRequest {
 
-    public record HistoryEntry(Instant at, String stage, String message) {}
+    @Id
+    @Column(name = "id", length = 64, nullable = false)
+    private String id;
 
-    private final String id;
-    private final String requester;
-    private final String email;
-    private final String subject;
-    private final String description;
-    private final Instant createdAt;
-    private volatile ApprovalState state;
-    private volatile String outcome;
-    private final List<HistoryEntry> history = Collections.synchronizedList(new ArrayList<>());
+    @Column(name = "requester", nullable = false, length = 128)
+    private String requester;
+
+    @Column(name = "email", nullable = false, length = 256)
+    private String email;
+
+    @Column(name = "subject", nullable = false, length = 256)
+    private String subject;
+
+    @Column(name = "description", length = 4096)
+    private String description;
+
+    @Column(name = "created_at", nullable = false)
+    private Instant createdAt;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "state", nullable = false, length = 32)
+    private ApprovalState state;
+
+    @Column(name = "outcome", length = 32)
+    private String outcome;
+
+    @OneToMany(mappedBy = "request", cascade = CascadeType.ALL,
+               orphanRemoval = true, fetch = FetchType.LAZY)
+    @OrderBy("at ASC")
+    private List<HistoryEntry> history = new ArrayList<>();
+
+    protected ApprovalRequest() {}
 
     public ApprovalRequest(String requester, String email, String subject, String description) {
         this.id = UUID.randomUUID().toString();
@@ -37,7 +73,7 @@ public class ApprovalRequest {
     }
 
     public void appendHistory(String stage, String message) {
-        history.add(new HistoryEntry(Instant.now(), stage, message));
+        history.add(new HistoryEntry(this, stage, message));
     }
 
     public String getId() { return id; }
