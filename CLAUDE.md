@@ -29,7 +29,8 @@ task build                 # mvn package + ng build
 task test                  # backend + frontend
 task test:backend          # mvn test (10 tests)
 task test:frontend         # vitest in jsdom (6 tests)
-task e2e                   # bash scripts/e2e-smoke.sh against a running stack
+task e2e                   # Playwright (browser) against a running stack
+task e2e:smoke             # legacy curl-based REST smoke test
 ```
 
 Direct invocations when not using `task`:
@@ -122,6 +123,7 @@ WebSocket `/approval-events` pushes `REQUEST_CREATED`, `STATE_CHANGED`, `TASK_CR
 
 - **H2 + `MODE=PostgreSQL` breaks `quarkus-flow-jpa`** — its `ProcessInstanceEntity.status` is `TINYINT`, which H2's PostgreSQL compatibility mode rejects. Keep the H2 URL plain (`jdbc:h2:file:./.h2/approval`).
 - **CI workflow file structure**: the e2e job spins up a `postgres:17-alpine` service and feeds `DB_URL`/`DB_USER`/`DB_PASSWORD` because the runner JAR defaults to `%prod`. If you change the prod datasource shape, mirror it in `.github/workflows/ci.yml`.
+- **E2E is Playwright-driven**: the job builds + runs the Quarkus runner JAR, installs Playwright Chromium (`npx playwright install --with-deps chromium`), and runs `npm run e2e` in `frontend/`. The Playwright config's `webServer` starts `ng serve` on `:4200` itself. Specs live in `frontend/e2e/`; reports + videos + traces are uploaded as artifacts on failure.
 - **`@TestProfile`** restarts Quarkus and creates a fresh `%test` H2 in-memory DB (`drop-and-create`), so tests using a custom profile run in their own clean DB. The default `%test` DB URL has `DB_CLOSE_DELAY=-1` so the in-memory DB survives across multiple `@QuarkusTest` classes in the same JVM but is dropped + recreated per Quarkus boot.
 - **Two CodeQL languages, both `build-mode: none`** in `.github/workflows/codeql.yml` — don't switch `java-kotlin` to `manual` unless you also re-add the JDK + Maven build step.
 - **`dependency-review.yml` is non-blocking** (`continue-on-error: true`) until the repo has GitHub Dependency Graph enabled (Settings → Security). Once that's on, remove the flag.

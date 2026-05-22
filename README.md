@@ -320,8 +320,9 @@ flow diagram highlights the current state.
 ```bash
 task test           # backend + frontend
 task test:backend   # Quarkus / JUnit5 / RestAssured
-task test:frontend  # Angular / Karma / Jasmine (headless Chrome)
-task e2e            # curl-based smoke test against a running stack
+task test:frontend  # Angular / Vitest (jsdom)
+task e2e            # Playwright drives the Angular UI against a running stack
+task e2e:smoke      # legacy curl-only REST smoke test
 ```
 
 * **Backend** — `ApprovalFlowTest` exercises the full workflow through
@@ -333,8 +334,12 @@ task e2e            # curl-based smoke test against a running stack
   Angular's `HttpTestingController`. Tests run under [Vitest](https://vitest.dev)
   in a jsdom environment via the Angular 21 `@angular/build:unit-test`
   builder — no browser or Karma required.
-* **End-to-end** — `scripts/e2e-smoke.sh` drives the running stack from
-  the outside via `curl` and verifies the terminal state.
+* **End-to-end** — [Playwright](https://playwright.dev) drives the Angular
+  UI in a real Chromium against a Postgres-backed Quarkus runner JAR. Two
+  specs in [`frontend/e2e/`](frontend/e2e) cover the happy path
+  (submit → confirm → group 1 approve → group 2 approve → APPROVED) and
+  a rejection path. The legacy `scripts/e2e-smoke.sh` is kept as a
+  fast REST-only smoke test you can run with `task e2e:smoke`.
 
 ## CI / CD
 
