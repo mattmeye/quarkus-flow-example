@@ -11,19 +11,120 @@ End-to-end demo of a multi-stage approval workflow:
    suspended until group 2 decides.
 4. **Terminal** — `APPROVED` if both groups approved, otherwise `REJECTED`.
 
+### End-to-end flow
+
+```mermaid
+flowchart LR
+    Start([New request]) --> Conf{Confirm<br/>email + terms?}
+    Conf -- confirmed --> G1{Group 1<br/>decision?}
+    Conf -- cancelled --> Rej([REJECTED])
+    G1 -- approve --> G2{Group 2<br/>decision?}
+    G1 -- reject --> Rej
+    G2 -- approve --> Appr([APPROVED])
+    G2 -- reject --> Rej
+
+    classDef terminal fill:#14532d,stroke:#22c55e,color:#bbf7d0
+    classDef reject   fill:#7f1d1d,stroke:#ef4444,color:#fecaca
+    class Appr terminal
+    class Rej reject
 ```
-AWAITING_CONFIRMATION ──► [confirm/cancel] ──► SUBMITTED
-                                                  │
-                                                  ▼
-                                AWAITING_GROUP1_APPROVAL
-                                                  │
-                                  ┌──── reject ───┴── approve ────┐
-                                  ▼                                ▼
-                              REJECTED              AWAITING_GROUP2_APPROVAL
-                                                                  │
-                                                    ┌── reject ───┴── approve ──┐
-                                                    ▼                            ▼
-                                                REJECTED                     APPROVED
+
+The demo is structured as **two cooperating sub-workflows**, both
+implemented as wait tasks of the same `ApprovalWorkflow`:
+
+1. The **Request workflow** — creates a `CONFIRMATION` task for the
+   requester and suspends until the requester either confirms email
+   ownership and accepts the terms, or cancels the request.
+2. The **Approval workflow** — runs only if confirmation succeeded;
+   creates two sequential `APPROVAL` tasks (group 1 first, group 2 only
+   if group 1 approved).
+
+#### Request workflow (async email / terms confirmation)
+
+```mermaid
+flowchart LR
+    Start([Request submitted]) --> CT["HumanTask<br/>type: CONFIRMATION<br/>assignee: REQUESTER<br/>context: { confirmationToken }"]
+    CT -- "POST /api/tasks/{id}/complete<br/>outcome = CONFIRMED<br/>payload: { token, termsAccepted }" --> Ok([Hand over to<br/>Approval workflow])
+    CT -- "POST /api/tasks/{id}/cancel" --> Rej([REJECTED])
+    CT -. "400 - invalid token<br/>or terms not accepted" .-> CT
+
+    classDef task     fill:#1e3a8a,stroke:#38bdf8,color:#bfdbfe
+    classDef reject   fill:#7f1d1d,stroke:#ef4444,color:#fecaca
+    class CT task
+    class Rej reject
+```
+
+#### Approval workflow (two sequential approval groups)
+
+```mermaid
+flowchart LR
+    Start([Confirmed request]) --> G1["HumanTask<br/>type: APPROVAL<br/>assignee: GROUP_1"]
+    G1 -- "outcome = APPROVED" --> G2["HumanTask<br/>type: APPROVAL<br/>assignee: GROUP_2"]
+    G1 -- "outcome = REJECTED" --> Rej([REJECTED])
+    G2 -- "outcome = APPROVED" --> Appr([APPROVED])
+    G2 -- "outcome = REJECTED" --> Rej
+
+    classDef task     fill:#1e3a8a,stroke:#38bdf8,color:#bfdbfe
+    classDef terminal fill:#14532d,stroke:#22c55e,color:#bbf7d0
+    classDef reject   fill:#7f1d1d,stroke:#ef4444,color:#fecaca
+    class G1,G2 task
+    class Appr terminal
+    class Rej reject
+```
+
+#### Task lifecycle
+
+Every async step in either sub-workflow is mediated by the same generic
+`HumanTask` state machine — that is exactly what makes the REST surface
+type-agnostic.
+
+```mermaid
+stateDiagram-v2
+    [*] --> PENDING : TaskService.create()
+    PENDING --> COMPLETED : POST /complete<br/>(valid outcome)
+    PENDING --> CANCELLED : POST /cancel
+    PENDING --> PENDING : POST /complete<br/>(invalid outcome,<br/>token or terms)
+    COMPLETED --> [*]
+    CANCELLED --> [*]
+```
+
+#### Happy-path interaction (REST + WebSocket)
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor U  as Requester (Angular)
+    actor G1 as Group 1 (Angular)
+    actor G2 as Group 2 (Angular)
+    participant REST as Quarkus REST
+    participant WF   as ApprovalWorkflow
+    participant TS   as TaskService
+    participant WS   as WebSocket
+
+    U->>REST: POST /api/requests
+    REST->>WF: instance.start()
+    WF->>TS: create(CONFIRMATION, REQUESTER)
+    TS-->>WS: TASK_CREATED
+    WS-->>U: live update
+
+    U->>REST: POST /api/tasks/{id}/complete<br/>{ outcome: CONFIRMED, payload }
+    REST->>TS: complete(...)
+    TS-->>WF: future.complete()
+    WF->>TS: create(APPROVAL, GROUP_1)
+    TS-->>WS: TASK_COMPLETED + TASK_CREATED
+    WS-->>G1: live update
+
+    G1->>REST: POST /api/tasks/{id}/complete<br/>{ outcome: APPROVED }
+    REST->>TS: complete(...)
+    TS-->>WF: future.complete()
+    WF->>TS: create(APPROVAL, GROUP_2)
+    WS-->>G2: live update
+
+    G2->>REST: POST /api/tasks/{id}/complete<br/>{ outcome: APPROVED }
+    REST->>TS: complete(...)
+    TS-->>WF: future.complete()
+    WF-->>REST: WorkflowOutput { APPROVED }
+    WS-->>U: STATE_CHANGED (APPROVED)
 ```
 
 ## Stack
