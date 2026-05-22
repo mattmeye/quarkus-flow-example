@@ -1,11 +1,17 @@
 import { Routes } from '@angular/router';
-import { RequestListComponent } from './components/request-list/request-list.component';
-import { RequestDetailComponent } from './components/request-detail/request-detail.component';
-import { TaskInboxComponent } from './components/task-inbox/task-inbox.component';
 
 export const routes: Routes = [
-  { path: '', component: RequestListComponent },
-  { path: 'tasks', component: TaskInboxComponent },
-  { path: 'requests/:id', component: RequestDetailComponent },
+  {
+    path: '',
+    loadComponent: () => import('./components/request-list/request-list').then(m => m.RequestList)
+  },
+  {
+    path: 'tasks',
+    loadComponent: () => import('./components/task-inbox/task-inbox').then(m => m.TaskInbox)
+  },
+  {
+    path: 'requests/:id',
+    loadComponent: () => import('./components/request-detail/request-detail').then(m => m.RequestDetail)
+  },
   { path: '**', redirectTo: '' }
 ];

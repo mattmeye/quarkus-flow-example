@@ -1,9 +1,9 @@
-import { Injectable } from '@angular/core';
+import { Injectable, inject } from '@angular/core';
 import { HttpClient, HttpParams } from '@angular/common/http';
 import { Observable } from 'rxjs';
 import {
   ApprovalRequest, AssigneeGroup, HumanTask, TaskStatus
-} from '../models/approval.model';
+} from '../models/approval';
 
 const API = 'http://localhost:8080/api';
 
@@ -23,9 +23,7 @@ export interface TaskFilter {
 
 @Injectable({ providedIn: 'root' })
 export class ApprovalService {
-  constructor(private http: HttpClient) {}
-
-  // ----- requests -----
+  private readonly http = inject(HttpClient);
 
   listRequests(): Observable<ApprovalRequest[]> {
     return this.http.get<ApprovalRequest[]>(`${API}/requests`);
@@ -38,8 +36,6 @@ export class ApprovalService {
   createRequest(req: CreatePayload): Observable<ApprovalRequest> {
     return this.http.post<ApprovalRequest>(`${API}/requests`, req);
   }
-
-  // ----- tasks (generic) -----
 
   listTasks(filter: TaskFilter = {}): Observable<HumanTask[]> {
     let params = new HttpParams();

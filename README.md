@@ -131,20 +131,24 @@ sequenceDiagram
 
 | Layer    | Tech                                                              |
 | -------- | ----------------------------------------------------------------- |
-| Workflow | [Quarkus Flow](https://docs.quarkiverse.io/quarkus-flow/dev/) (CNCF Serverless Workflow DSL 1.0.0) via `io.quarkiverse.flow:quarkus-flow` |
-| Backend  | Quarkus 3.35 (REST + WebSocket)                                    |
-| Frontend | Angular 18 standalone components                                   |
+| Workflow | [Quarkus Flow](https://docs.quarkiverse.io/quarkus-flow/dev/) 0.9.0 (CNCF Serverless Workflow DSL) via `io.quarkiverse.flow:quarkus-flow` |
+| Backend  | Quarkus 3.35.x on Java 21 LTS — REST (`quarkus-rest-jackson`) + `quarkus-websockets-next` |
+| Frontend | Angular 21 (zoneless, signals, signal inputs/outputs, new control flow) + Tailwind CSS v4 |
+| Tests    | JUnit 5 / REST-Assured / Awaitility (backend) — Vitest (frontend) |
 | Transport | REST (commands) + WebSocket (live state events to the UI)         |
 
 The workflow is defined in two equivalent ways:
 * **Runtime source of truth:** Java DSL in
   [`ApprovalWorkflow.java`](backend/src/main/java/com/example/approval/ApprovalWorkflow.java)
-  using `FuncWorkflowBuilder` from Serverless Workflow Java SDK.
+  using `FuncWorkflowBuilder` from the Serverless Workflow Java SDK. The
+  workflow is modelled as a single CNCF function task that drives all
+  stages — branching on outcome happens inline in Java, with no
+  exception-based control flow.
 * **Declarative reference:** [`approval.yaml`](backend/src/main/flow/approval.yaml)
   in the standard `src/main/flow` location.
 
 Asynchronous wait tasks block on per-request `CompletableFuture`s held in
-`ApprovalService`; the matching REST endpoints complete those futures so
+`TaskService`; the matching REST endpoints complete those futures so
 the workflow resumes.
 
 ## Tooling
@@ -153,7 +157,7 @@ Tool versions are pinned with [mise](https://mise.jdx.dev) and orchestrated
 with [task](https://taskfile.dev):
 
 ```bash
-# one-time, installs Java 17, Maven, Node 20, Task into the project shell
+# one-time, installs Java 21 LTS, Maven 3.9.x, Node 22, Task into the project shell
 mise install
 
 # show all available tasks
@@ -217,6 +221,24 @@ npm start               # http://localhost:4200
 
 CORS is pre-configured for `http://localhost:4200`.
 
+The UI is built with Angular 21 and leans on the modern stack:
+
+* **Zoneless change detection** (`provideZonelessChangeDetection`) — no
+  `zone.js` polyfill, all reactivity flows through signals.
+* **Signal-based components** — `signal()`, `computed()`, `effect()`,
+  `input.required<T>()`, `output<T>()`. `ChangeDetectionStrategy.OnPush`
+  on every component.
+* **Lazy-loaded standalone routes** via `loadComponent`.
+* **Router component-input binding** (`withComponentInputBinding`) +
+  **view transitions** (`withViewTransitions`).
+* **New control-flow syntax** in templates — `@if` / `@else if` /
+  `@else`, `@for ... track`, `@switch / @case`, `@let`.
+* **`inject()` everywhere** instead of constructor parameter
+  injection.
+* **Tailwind CSS v4** with CSS-first config (`@theme { ... }`) and
+  custom component utilities via `@layer components`. PostCSS is wired
+  through `@tailwindcss/postcss` in `.postcssrc.json`.
+
 ## Try it end-to-end
 
 1. Open <http://localhost:4200>.
@@ -237,7 +259,7 @@ flow diagram highlights the current state.
 ```bash
 task test           # backend + frontend
 task test:backend   # Quarkus / JUnit5 / RestAssured
-task test:frontend  # Angular / Karma / Jasmine (headless Chrome)
+task test:frontend  # Angular / Vitest (jsdom)
 task e2e            # curl-based smoke test against a running stack
 ```
 
@@ -245,8 +267,10 @@ task e2e            # curl-based smoke test against a running stack
   REST: happy path (submit → confirm → group1 approve → group2 approve →
   APPROVED) plus rejection paths at every async step, invalid input,
   wrong token and missing terms acceptance.
-* **Frontend** — `approval.model.spec.ts` and `approval.service.spec.ts`
-  cover the state-helper functions and the HTTP service contracts using
-  Angular's `HttpTestingController`.
+* **Frontend** — `models/approval.spec.ts` and `services/approval.spec.ts`
+  run on [Vitest](https://vitest.dev) via Angular CLI's
+  `@angular/build:unit-test` builder. They cover the state-helper
+  functions and the HTTP service contracts using Angular's
+  `HttpTestingController`.
 * **End-to-end** — `scripts/e2e-smoke.sh` drives the running stack from
   the outside via `curl` and verifies the terminal state.

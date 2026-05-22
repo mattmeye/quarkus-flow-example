@@ -55,31 +55,31 @@ export interface ApprovalEvent {
 
 export function stateBadgeClass(s: ApprovalState): string {
   switch (s) {
-    case 'AWAITING_CONFIRMATION': return 'badge confirm';
-    case 'SUBMITTED': return 'badge submitted';
-    case 'AWAITING_GROUP1_APPROVAL': return 'badge awaiting1';
-    case 'AWAITING_GROUP2_APPROVAL': return 'badge awaiting2';
-    case 'APPROVED': return 'badge approved';
-    case 'REJECTED': return 'badge rejected';
+    case 'AWAITING_CONFIRMATION':    return 'badge badge-confirm';
+    case 'SUBMITTED':                return 'badge badge-submitted';
+    case 'AWAITING_GROUP1_APPROVAL': return 'badge badge-await1';
+    case 'AWAITING_GROUP2_APPROVAL': return 'badge badge-await2';
+    case 'APPROVED':                 return 'badge badge-approved';
+    case 'REJECTED':                 return 'badge badge-rejected';
   }
 }
 
 export function stateLabel(s: ApprovalState): string {
   switch (s) {
-    case 'AWAITING_CONFIRMATION': return 'Awaiting confirmation';
-    case 'SUBMITTED': return 'Submitted';
+    case 'AWAITING_CONFIRMATION':    return 'Awaiting confirmation';
+    case 'SUBMITTED':                return 'Submitted';
     case 'AWAITING_GROUP1_APPROVAL': return 'Awaiting Group 1';
     case 'AWAITING_GROUP2_APPROVAL': return 'Awaiting Group 2';
-    case 'APPROVED': return 'Approved';
-    case 'REJECTED': return 'Rejected';
+    case 'APPROVED':                 return 'Approved';
+    case 'REJECTED':                 return 'Rejected';
   }
 }
 
 export function groupLabel(g: AssigneeGroup): string {
   switch (g) {
     case 'REQUESTER': return 'Requester';
-    case 'GROUP_1': return 'Approval Group 1';
-    case 'GROUP_2': return 'Approval Group 2';
+    case 'GROUP_1':   return 'Approval Group 1';
+    case 'GROUP_2':   return 'Approval Group 2';
   }
 }
 

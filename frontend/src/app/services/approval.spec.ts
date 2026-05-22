@@ -1,7 +1,8 @@
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { TestBed } from '@angular/core/testing';
 import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
-import { ApprovalService } from './approval.service';
+import { ApprovalService } from './approval';
 
 describe('ApprovalService', () => {
   let svc: ApprovalService;
@@ -28,7 +29,7 @@ describe('ApprovalService', () => {
     }).subscribe();
     const req = httpMock.expectOne('http://localhost:8080/api/requests');
     expect(req.request.method).toBe('POST');
-    expect(req.request.body.termsAcknowledged).toBeTrue();
+    expect(req.request.body.termsAcknowledged).toBe(true);
     req.flush({});
   });
 

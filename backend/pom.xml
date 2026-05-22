@@ -12,12 +12,12 @@
 
     <properties>
         <compiler-plugin.version>3.13.0</compiler-plugin.version>
-        <maven.compiler.release>17</maven.compiler.release>
+        <maven.compiler.release>21</maven.compiler.release>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <quarkus.platform.group-id>io.quarkus.platform</quarkus.platform.group-id>
         <quarkus.platform.artifact-id>quarkus-bom</quarkus.platform.artifact-id>
         <quarkus.platform.version>3.35.4</quarkus.platform.version>
-        <quarkus.flow.version>1.0.0-SNAPSHOT</quarkus.flow.version>
+        <quarkus.flow.version>0.9.0</quarkus.flow.version>
         <surefire-plugin.version>3.5.5</surefire-plugin.version>
     </properties>
 
@@ -46,10 +46,10 @@
             <artifactId>quarkus-rest-jackson</artifactId>
         </dependency>
 
-        <!-- WebSocket fuer Live-Updates an die Angular UI -->
+        <!-- WebSocket fuer Live-Updates an die Angular UI (websockets-next API) -->
         <dependency>
             <groupId>io.quarkus</groupId>
-            <artifactId>quarkus-websockets</artifactId>
+            <artifactId>quarkus-websockets-next</artifactId>
         </dependency>
 
         <!-- Quarkus Flow Extension (CNCF Serverless Workflow) -->
