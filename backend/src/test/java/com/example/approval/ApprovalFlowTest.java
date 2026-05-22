@@ -22,7 +22,7 @@ class ApprovalFlowTest {
 
         // confirmation task
         var confirmation = waitForTask(id, "CONFIRMATION", "REQUESTER");
-        String token = (String) confirmation.get("context").toString().contains("confirmationToken")
+        String token = confirmation.get("context").toString().contains("confirmationToken")
                 ? ((Map<?,?>) confirmation.get("context")).get("confirmationToken").toString()
                 : null;
         complete(confirmation.get("id").toString(), "alice", "CONFIRMED",

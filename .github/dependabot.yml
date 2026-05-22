@@ -1,0 +1,86 @@
+# Dependabot configuration
+# https://docs.github.com/en/code-security/dependabot/dependabot-version-updates/configuration-options-for-the-dependabot.yml-file
+version: 2
+
+updates:
+  # ---------- Backend (Maven / Quarkus) ----------
+  - package-ecosystem: "maven"
+    directory: "/backend"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "Europe/Berlin"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+      - "backend"
+    commit-message:
+      prefix: "chore(backend)"
+      include: "scope"
+    groups:
+      quarkus:
+        patterns:
+          - "io.quarkus*"
+          - "io.quarkiverse*"
+      serverlessworkflow:
+        patterns:
+          - "io.serverlessworkflow*"
+      maven-plugins:
+        patterns:
+          - "org.apache.maven.plugins:*"
+      test-dependencies:
+        patterns:
+          - "io.rest-assured:*"
+          - "org.awaitility:*"
+          - "org.junit*"
+
+  # ---------- Frontend (npm / Angular) ----------
+  - package-ecosystem: "npm"
+    directory: "/frontend"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "Europe/Berlin"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+      - "frontend"
+    commit-message:
+      prefix: "chore(frontend)"
+      include: "scope"
+    groups:
+      angular:
+        patterns:
+          - "@angular/*"
+          - "@angular-devkit/*"
+      karma:
+        patterns:
+          - "karma*"
+          - "jasmine*"
+          - "@types/jasmine"
+      typescript:
+        patterns:
+          - "typescript"
+          - "tslib"
+
+  # ---------- GitHub Actions ----------
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "Europe/Berlin"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "ci"
+    commit-message:
+      prefix: "chore(ci)"
+      include: "scope"
+    groups:
+      actions:
+        patterns:
+          - "*"

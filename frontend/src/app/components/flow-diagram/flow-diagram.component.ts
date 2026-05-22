@@ -124,6 +124,17 @@ export class FlowDiagramComponent {
     return this.request.state === n.id;
   }
 
+  private emailConfirmed(): boolean {
+    return !!this.request?.tasks.some(t => t.type === 'CONFIRMATION' && t.outcome === 'CONFIRMED');
+  }
+
+  private groupDecision(group: 'GROUP_1' | 'GROUP_2'): string | null {
+    const t = this.request?.tasks.find(
+      x => x.type === 'APPROVAL' && x.assigneeGroup === group && x.outcome != null
+    );
+    return t?.outcome ?? null;
+  }
+
   private hasReached(n: Node): boolean {
     if (!this.request) return false;
     const s = this.request.state;
@@ -134,19 +145,22 @@ export class FlowDiagramComponent {
       'AWAITING_GROUP2_APPROVAL',
       'APPROVED'
     ];
+    const confirmed = this.emailConfirmed();
+    const g1 = this.groupDecision('GROUP_1');
+    const g2 = this.groupDecision('GROUP_2');
     if (n.kind === 'gate') {
-      if (n.id === 'CONFIRM_GATE') return this.request.emailConfirmed || s === 'REJECTED';
-      if (n.id === 'GROUP1_GATE') return !!this.request.group1Decision;
-      if (n.id === 'GROUP2_GATE') return !!this.request.group2Decision;
+      if (n.id === 'CONFIRM_GATE') return confirmed || s === 'REJECTED';
+      if (n.id === 'GROUP1_GATE') return !!g1;
+      if (n.id === 'GROUP2_GATE') return !!g2;
       return false;
     }
     if (n.id === 'REJECTED') return s === 'REJECTED';
     if (s === 'REJECTED') {
       // mark whichever states *did* run before rejection as reached
       if (n.id === 'AWAITING_CONFIRMATION') return true;
-      if (n.id === 'SUBMITTED') return this.request.emailConfirmed;
-      if (n.id === 'AWAITING_GROUP1_APPROVAL') return this.request.emailConfirmed;
-      if (n.id === 'AWAITING_GROUP2_APPROVAL') return this.request.group1Decision === 'APPROVED';
+      if (n.id === 'SUBMITTED') return confirmed;
+      if (n.id === 'AWAITING_GROUP1_APPROVAL') return confirmed;
+      if (n.id === 'AWAITING_GROUP2_APPROVAL') return g1 === 'APPROVED';
       return false;
     }
     const idx = order.indexOf(n.id as ApprovalState);
