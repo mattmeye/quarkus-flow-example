@@ -95,9 +95,17 @@ tasks:
 
   e2e:
     desc: |
-      Smoke-test the running stack via curl: submits a request, confirms
-      it, approves twice and asserts the final state is APPROVED.
-      Requires `task dev` (or at least `task dev:backend`) to be running
-      in another shell.
+      Drive the Angular UI end-to-end with Playwright against a running
+      backend. Requires `task dev:backend` in another shell; Playwright
+      starts its own ng serve on :4200.
+    dir: '{{.FRONTEND_DIR}}'
+    cmds:
+      - npm run e2e
+
+  e2e:smoke:
+    desc: |
+      Quick curl-based REST smoke test (no browser). Useful for fast
+      sanity checks without spinning up Playwright. Requires `task dev`
+      (or at least `task dev:backend`) to be running in another shell.
     cmds:
       - bash scripts/e2e-smoke.sh

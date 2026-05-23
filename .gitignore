@@ -17,6 +17,10 @@ dist/
 npm-debug.log*
 yarn-error.log*
 
+# Playwright
+playwright-report/
+test-results/
+
 # IDE
 .idea/
 *.iml

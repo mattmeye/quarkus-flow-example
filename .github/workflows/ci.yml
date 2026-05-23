@@ -133,7 +133,7 @@ jobs:
   # End-to-end smoke test (curl against the running Quarkus backend)
   # ---------------------------------------------------------------------------
   e2e:
-    name: E2E smoke test
+    name: E2E (Playwright + UI)
     runs-on: ubuntu-latest
     needs: [backend]
     # Spin up a real PostgreSQL so the e2e covers the %prod datasource path
@@ -168,8 +168,12 @@ jobs:
           java-version: ${{ env.JAVA_VERSION }}
           cache: maven
 
-      - name: Install jq
-        run: sudo apt-get update && sudo apt-get install -y jq
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
 
       - name: Build runner JAR
         working-directory: backend
@@ -189,8 +193,17 @@ jobs:
           done
           echo "Quarkus failed to start within timeout"; tail -200 quarkus.log; exit 1
 
-      - name: Run smoke test
-        run: bash scripts/e2e-smoke.sh
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci --no-audit --no-fund
+
+      - name: Install Playwright browsers
+        working-directory: frontend
+        run: npx playwright install --with-deps chromium
+
+      - name: Run Playwright E2E
+        working-directory: frontend
+        run: npm run e2e
 
       - name: Stop Quarkus
         if: always()
@@ -199,6 +212,24 @@ jobs:
           if [ -f quarkus.pid ]; then
             kill "$(cat quarkus.pid)" 2>/dev/null || true
           fi
+
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: playwright-report
+          path: frontend/playwright-report
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Upload Playwright test results (videos / traces)
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: playwright-test-results
+          path: frontend/test-results
+          if-no-files-found: ignore
+          retention-days: 7
 
       - name: Upload Quarkus log
         if: always()

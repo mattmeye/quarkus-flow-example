@@ -62,6 +62,10 @@ public class ApprovalResource {
                 req.description() == null ? "" : req.description());
 
         WorkflowInstance instance = workflow.instance(new ApprovalWorkflow.WorkflowInput(r.getId()));
+        // Persist the engine instance id BEFORE start() so REST handlers and
+        // the scheduler can emit CloudEvents addressed to the workflow even
+        // if the first listen point is reached very quickly.
+        approvals.recordWorkflowInstanceId(r.getId(), instance.id());
         instance.start().whenComplete((model, err) -> {
             if (err != null) {
                 log.error("Workflow {} failed", r.getId(), err);

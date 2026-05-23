@@ -1,6 +1,7 @@
 package com.example.approval;
 
 import io.quarkus.hibernate.orm.panache.PanacheRepositoryBase;
+import io.quarkus.narayana.jta.QuarkusTransaction;
 import io.quarkus.scheduler.Scheduled;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.inject.Instance;
@@ -15,34 +16,30 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
 
 /**
  * Owns all {@link HumanTask}s and brokers their lifecycle between the
  * workflow (which awaits a task) and REST callers (which complete or
  * cancel a task).
  *
- * Persistent fields (status, dueAt, reminderAt, …) live on the JPA
- * entity, so every transition survives a restart. The per-task
- * {@link CompletableFuture} the workflow blocks on is intentionally NOT
- * persisted — it is JVM-scoped state held in {@link #futures}. Within a
- * single JVM lifetime that bridges the persistent transitions to the
- * workflow's `tasks.await(...)` call; across restarts a workflow that
- * was mid-await would need to be resumed via an event (out of scope for
- * the demo).
+ * Persistence-only design: the workflow's wait is implemented as a
+ * {@link #awaitResolved} DB poll against the persistent task row, not as
+ * a heap-bound {@code CompletableFuture}. Combined with the engine's
+ * own JPA persistence (via {@code quarkus-flow-jpa}) that makes the
+ * whole workflow cross-restart durable — if the JVM dies mid-wait, the
+ * engine resumes from JPA, re-enters the same {@code function}, and the
+ * poll either sees the task already resolved (and returns) or keeps
+ * polling until it is.
  */
 @ApplicationScoped
 public class TaskService implements PanacheRepositoryBase<HumanTask, String> {
 
     private static final Logger log = LoggerFactory.getLogger(TaskService.class);
-    private static final long AWAIT_TIMEOUT_HOURS = 72;
 
-    /** In-memory CompletableFutures keyed by task id. Not persisted. */
-    private final Map<String, CompletableFuture<TaskResult>> futures = new ConcurrentHashMap<>();
+    /** How often the workflow function polls the DB while a task is PENDING. */
+    private static final Duration POLL_INTERVAL = Duration.ofMillis(200);
+    /** Safety cap on the polling loop to avoid pinning a workflow thread forever. */
+    private static final Duration POLL_TIMEOUT = Duration.ofHours(72);
 
     @Inject
     Instance<ApprovalEventPublisher> eventPublisher;
@@ -66,7 +63,6 @@ public class TaskService implements PanacheRepositoryBase<HumanTask, String> {
         HumanTask task = new HumanTask(requestId, type, name, group, context,
                 timeout, reminderOffsetFraction);
         persist(task);
-        futures.put(task.getId(), new CompletableFuture<>());
         log.info("Created task {} ({}) for request {} assigned to {} (dueAt={}, reminderAt={})",
                 task.getId(), type, requestId, group, task.getDueAt(), task.getReminderAt());
         publish(ApprovalEvent.taskCreated(task));
@@ -76,6 +72,18 @@ public class TaskService implements PanacheRepositoryBase<HumanTask, String> {
     @Transactional
     public Optional<HumanTask> lookup(String taskId) {
         return Optional.ofNullable(findById(taskId));
+    }
+
+    /**
+     * Used by the workflow to make stage re-entry idempotent after a JVM
+     * restart: if an unresolved task for this request and stage already
+     * exists, the workflow attaches to it instead of creating a duplicate.
+     */
+    @Transactional
+    public Optional<HumanTask> findPendingFor(String requestId, HumanTask.Type type,
+                                              HumanTask.AssigneeGroup group) {
+        return find("requestId = ?1 and type = ?2 and assigneeGroup = ?3 and status = ?4",
+                requestId, type, group, HumanTask.Status.PENDING).firstResultOptional();
     }
 
     @Transactional
@@ -103,7 +111,6 @@ public class TaskService implements PanacheRepositoryBase<HumanTask, String> {
         task.markCompleted(result);
         log.info("Completed task {} with outcome={} by={}", taskId, outcome, actor);
         publish(ApprovalEvent.taskCompleted(task));
-        signal(taskId, result);
         return result;
     }
 
@@ -117,25 +124,41 @@ public class TaskService implements PanacheRepositoryBase<HumanTask, String> {
         task.markCancelled(actor, reason);
         log.info("Cancelled task {} by={} reason={}", taskId, actor, reason);
         publish(ApprovalEvent.taskCompleted(task));
-        signal(taskId, task.asResult());
     }
 
     /**
-     * Blocks the calling (workflow) thread until the task is completed,
-     * cancelled or expired, then returns the result.
+     * Blocks the calling (workflow) thread until the task reaches a
+     * terminal state. Implemented as a short-interval DB poll so no
+     * non-persistent state (futures, in-process maps) is involved —
+     * which is exactly what makes this workflow survive a JVM restart.
      */
-    public TaskResult await(HumanTask task) {
-        CompletableFuture<TaskResult> f = futures.computeIfAbsent(task.getId(), k -> new CompletableFuture<>());
-        try {
-            return f.get(AWAIT_TIMEOUT_HOURS, TimeUnit.HOURS);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new RuntimeException("Interrupted while waiting for task " + task.getId(), e);
-        } catch (ExecutionException | TimeoutException e) {
-            throw new RuntimeException("Failed waiting for task " + task.getId(), e);
-        } finally {
-            futures.remove(task.getId());
+    public TaskResult awaitResolved(String taskId) {
+        Instant deadline = Instant.now().plus(POLL_TIMEOUT);
+        while (Instant.now().isBefore(deadline)) {
+            HumanTask snapshot = readStatus(taskId);
+            if (snapshot == null) {
+                throw new IllegalArgumentException("Unknown task id: " + taskId);
+            }
+            if (snapshot.getStatus() != HumanTask.Status.PENDING) {
+                TaskResult r = snapshot.asResult();
+                if (r != null) return r;
+            }
+            try {
+                Thread.sleep(POLL_INTERVAL.toMillis());
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new RuntimeException("Interrupted while waiting for task " + taskId, e);
+            }
         }
+        throw new RuntimeException("Timed out waiting for task " + taskId);
+    }
+
+    /**
+     * Read the task in its own short-lived transaction so the polling
+     * loop never holds a TX open between iterations.
+     */
+    private HumanTask readStatus(String taskId) {
+        return QuarkusTransaction.requiringNew().call(() -> findById(taskId));
     }
 
     /**
@@ -160,22 +183,10 @@ public class TaskService implements PanacheRepositoryBase<HumanTask, String> {
                 log.info("Expired task {} ({}) at {}",
                         task.getId(), task.getType(), task.getDueAt());
                 publish(ApprovalEvent.taskExpired(task));
-                signal(task.getId(), task.asResult());
             }
         }
     }
 
-    private void signal(String taskId, TaskResult result) {
-        CompletableFuture<TaskResult> f = futures.get(taskId);
-        if (f != null && !f.isDone()) {
-            f.complete(result);
-        }
-    }
-
-    /**
-     * Per-type validation. Kept inline for the demo; in a real system this
-     * would be a CDI-discovered {@code TaskValidator} per type.
-     */
     private void validate(HumanTask task, String outcome, Map<String, Object> payload) {
         switch (task.getType()) {
             case CONFIRMATION -> {
