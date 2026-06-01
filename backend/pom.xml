@@ -18,7 +18,7 @@
         <quarkus.platform.artifact-id>quarkus-bom</quarkus.platform.artifact-id>
         <quarkus.platform.version>3.35.4</quarkus.platform.version>
         <quarkus.flow.version>0.9.0</quarkus.flow.version>
-        <serverlessworkflow.version>7.21.1.Final</serverlessworkflow.version>
+        <serverlessworkflow.version>7.21.2.Final</serverlessworkflow.version>
         <surefire-plugin.version>3.5.5</surefire-plugin.version>
     </properties>
 
