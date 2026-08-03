@@ -31,7 +31,7 @@
     "@angular/compiler-cli": "^21.2.0",
     "@playwright/test": "^1.60.0",
     "@vitest/coverage-v8": "^4.1.0",
-    "jsdom": "^29.1.0",
+    "jsdom": "^30.0.1",
     "typescript": "~5.9.0",
     "vitest": "^4.1.0"
   }
